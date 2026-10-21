@@ -17,7 +17,9 @@
  */
 package com.viaversion.viaversion.bukkit.platform;
 
+import com.viaversion.viaversion.api.Via;
 import java.lang.reflect.Method;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.logging.Level;
 import org.bukkit.World;
 import org.bukkit.plugin.Plugin;
@@ -41,12 +43,19 @@ import org.bukkit.plugin.Plugin;
 public final class MicroServersSupport {
 
     private static final String MICRO_SERVERS = "dev.reximian9k.spigot.micro.MicroServers";
+    private static final AtomicBoolean WARNED_DOMAINS = new AtomicBoolean();
 
     private MicroServersSupport() {
     }
 
-    /** True on Blueprint, whether or not MicroServers is enabled there. */
+    /**
+     * True on Blueprint, whether or not MicroServers is enabled there. False (with one warning)
+     * on a Blueprint whose MicroServers API no longer matches.
+     */
     public static boolean isBlueprint() {
+        if (Domains.FAILURE != null) {
+            warnDomainsOnce("Blueprint's MicroServers API did not match what ViaVersion expects", Domains.FAILURE);
+        }
         return Domains.OF != null;
     }
 
@@ -69,7 +78,16 @@ public final class MicroServersSupport {
             Domains.RUN_TASK_TIMER.invoke(domain, task, delayTicks, 0L);
             return true;
         } catch (final ReflectiveOperationException | RuntimeException e) {
+            warnDomainsOnce("Could not schedule on a Blueprint MicroServers game thread", e);
             return false;
+        }
+    }
+
+    /** The main-thread fallback can't order block acks behind a game thread, so say so once. */
+    private static void warnDomainsOnce(final String reason, final Throwable cause) {
+        if (WARNED_DOMAINS.compareAndSet(false, true)) {
+            Via.getPlatform().getLogger().log(Level.WARNING, reason + "; block place/break acks fall back to "
+                + "main-thread timing, so 1.19+ clients in game worlds may see placed blocks flicker", cause);
         }
     }
 
@@ -78,23 +96,35 @@ public final class MicroServersSupport {
         static final Method OF;
         static final Method IS_GLOBAL;
         static final Method RUN_TASK_TIMER;
+        /** Set when Blueprint is present but its API did not resolve; null off Blueprint. */
+        static final Throwable FAILURE;
 
         static {
             Method of = null;
             Method isGlobal = null;
             Method runTaskTimer = null;
+            Throwable failure = null;
+            Class<?> microServers = null;
             try {
-                final Class<?> microServers = Class.forName(MICRO_SERVERS);
-                final Class<?> microServer = Class.forName("dev.reximian9k.spigot.micro.MicroServer");
-                isGlobal = microServer.getMethod("isGlobal");
-                runTaskTimer = microServer.getMethod("runTaskTimer", Runnable.class, long.class, long.class);
-                of = microServers.getMethod("of", World.class);
-            } catch (final ReflectiveOperationException | LinkageError ignored) {
-                of = null;
+                microServers = Class.forName(MICRO_SERVERS);
+            } catch (final ClassNotFoundException | LinkageError notBlueprint) {
+                // not Blueprint: nothing to resolve, nothing to report
+            }
+            if (microServers != null) {
+                try {
+                    final Class<?> microServer = Class.forName("dev.reximian9k.spigot.micro.MicroServer");
+                    isGlobal = microServer.getMethod("isGlobal");
+                    runTaskTimer = microServer.getMethod("runTaskTimer", Runnable.class, long.class, long.class);
+                    of = microServers.getMethod("of", World.class);
+                } catch (final ReflectiveOperationException | LinkageError e) {
+                    of = null;
+                    failure = e;
+                }
             }
             OF = of;
             IS_GLOBAL = isGlobal;
             RUN_TASK_TIMER = runTaskTimer;
+            FAILURE = failure;
         }
     }
 
