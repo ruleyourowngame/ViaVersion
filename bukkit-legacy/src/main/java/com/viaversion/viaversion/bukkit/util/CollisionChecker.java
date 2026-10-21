@@ -18,6 +18,7 @@
 package com.viaversion.viaversion.bukkit.util;
 
 import com.viaversion.viaversion.api.Via;
+import java.lang.reflect.Constructor;
 import java.lang.reflect.Method;
 import java.util.AbstractList;
 import java.util.List;
@@ -48,12 +49,12 @@ public class CollisionChecker {
     private final Method GET_BLOCK_TYPE;
     private final Method GET_COLLISIONS;
 
-    private final Method SET_POSITION;
-    private final Object BLOCK_POSITION;
+    // A position per call: placements in different worlds are checked at once on Blueprint
+    // MicroServers game threads, and a shared mutable one let one world's check read another's block
+    private final Constructor<?> NEW_BLOCK_POSITION;
 
     private CollisionChecker() throws ReflectiveOperationException {
         Class<?> blockPosition = NMSUtil.nms("BlockPosition");
-        Class<?> mutableBlockPosition = NMSUtil.nms("BlockPosition$MutableBlockPosition");
         Class<?> world = NMSUtil.nms("World");
 
         GET_ENTITY_HANDLE = NMSUtil.obc("entity.CraftEntity").getDeclaredMethod("getHandle");
@@ -72,8 +73,7 @@ public class CollisionChecker {
             List.class,
             GET_ENTITY_HANDLE.getReturnType());
 
-        SET_POSITION = mutableBlockPosition.getDeclaredMethod("c", int.class, int.class, int.class);
-        BLOCK_POSITION = mutableBlockPosition.getConstructor().newInstance();
+        NEW_BLOCK_POSITION = blockPosition.getConstructor(int.class, int.class, int.class);
     }
 
     public static CollisionChecker getInstance() {
@@ -87,15 +87,15 @@ public class CollisionChecker {
             Object nmsBlock = GET_BLOCK_BY_ID.invoke(null, block.getType().getId());
             Object nmsWorld = GET_WORLD_HANDLE.invoke(block.getWorld());
 
-            SET_POSITION.invoke(BLOCK_POSITION, block.getX(), block.getY(), block.getZ());
+            Object position = NEW_BLOCK_POSITION.newInstance(block.getX(), block.getY(), block.getZ());
 
             // Dummy list to avoid saving actual collision BB, we only care about if any collision happened
             List<?> collisions = new DummyList<>();
 
             GET_COLLISIONS.invoke(nmsBlock,
                 nmsWorld,
-                BLOCK_POSITION,
-                GET_BLOCK_TYPE.invoke(nmsWorld, BLOCK_POSITION),
+                position,
+                GET_BLOCK_TYPE.invoke(nmsWorld, position),
                 GET_ENTITY_BB.invoke(nmsPlayer),
                 collisions,
                 nmsPlayer);
