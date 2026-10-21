@@ -17,7 +17,9 @@
  */
 package com.viaversion.viaversion.bukkit.platform;
 
+import java.lang.reflect.Method;
 import java.util.logging.Level;
+import org.bukkit.World;
 import org.bukkit.plugin.Plugin;
 
 /**
@@ -41,6 +43,59 @@ public final class MicroServersSupport {
     private static final String MICRO_SERVERS = "dev.reximian9k.spigot.micro.MicroServers";
 
     private MicroServersSupport() {
+    }
+
+    /** True on Blueprint, whether or not MicroServers is enabled there. */
+    public static boolean isBlueprint() {
+        return Domains.OF != null;
+    }
+
+    /**
+     * Main thread. Runs {@code task} on the game MicroServer thread that ticks {@code world},
+     * {@code delayTicks} of that thread's ticks from now.
+     *
+     * @return false when {@code world} is ticked by the main thread (or this is not Blueprint):
+     * nothing was scheduled
+     */
+    public static boolean runOnGameThread(final World world, final Runnable task, final long delayTicks) {
+        if (Domains.OF == null) {
+            return false;
+        }
+        try {
+            final Object domain = Domains.OF.invoke(null, world);
+            if (domain == null || (Boolean) Domains.IS_GLOBAL.invoke(domain)) {
+                return false;
+            }
+            Domains.RUN_TASK_TIMER.invoke(domain, task, delayTicks, 0L);
+            return true;
+        } catch (final ReflectiveOperationException | RuntimeException e) {
+            return false;
+        }
+    }
+
+    /** {@code MicroServers.of(World)} and the two {@code MicroServer} methods, resolved once. */
+    private static final class Domains {
+        static final Method OF;
+        static final Method IS_GLOBAL;
+        static final Method RUN_TASK_TIMER;
+
+        static {
+            Method of = null;
+            Method isGlobal = null;
+            Method runTaskTimer = null;
+            try {
+                final Class<?> microServers = Class.forName(MICRO_SERVERS);
+                final Class<?> microServer = Class.forName("dev.reximian9k.spigot.micro.MicroServer");
+                isGlobal = microServer.getMethod("isGlobal");
+                runTaskTimer = microServer.getMethod("runTaskTimer", Runnable.class, long.class, long.class);
+                of = microServers.getMethod("of", World.class);
+            } catch (final ReflectiveOperationException | LinkageError ignored) {
+                of = null;
+            }
+            OF = of;
+            IS_GLOBAL = isGlobal;
+            RUN_TASK_TIMER = runTaskTimer;
+        }
     }
 
     /** Marks {@code plugin}'s listeners safe on game threads; does nothing off Blueprint MicroServers. */
