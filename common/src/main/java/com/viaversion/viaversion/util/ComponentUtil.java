@@ -46,6 +46,29 @@ public final class ComponentUtil {
 
     private static final int MAX_UNSIGNED_SHORT = 65535;
 
+    // Arch start - the same text goes to every player (chat broadcasts, tab header/footer, team
+    // prefixes, hologram names, item lore), and each modern player's pipeline converted it again.
+    // These conversions are pure, so results are kept and copied out. Long inputs (books, big
+    // hover events) are rare and not worth holding.
+    private static final int CACHE_CAPACITY = 1024;
+    private static final int MAX_CACHED_INPUT = 8192;
+    private static final ConversionCache<String, Tag> JSON_TO_TAG = new ConversionCache<>(CACHE_CAPACITY);
+    private static final ConversionCache<VersionedInput, Tag> JSON_STRING_TO_TAG = new ConversionCache<>(CACHE_CAPACITY);
+    private static final ConversionCache<VersionedInput, JsonElement> JSON_OR_EMPTY = new ConversionCache<>(CACHE_CAPACITY);
+    private static final ConversionCache<String, JsonElement> LEGACY_TO_JSON = new ConversionCache<>(CACHE_CAPACITY);
+    private static final ConversionCache<LegacyInput, String> LEGACY_TO_JSON_STRING = new ConversionCache<>(CACHE_CAPACITY);
+
+    private record VersionedInput(String input, SerializerVersion from, SerializerVersion to) {
+    }
+
+    private record LegacyInput(String message, boolean itemData) {
+    }
+
+    private static boolean cacheable(final String input) {
+        return ConversionCache.ENABLED && input.length() <= MAX_CACHED_INPUT;
+    }
+    // Arch end
+
     public static JsonObject emptyJsonComponent() {
         return plainToJson("");
     }
@@ -78,14 +101,26 @@ public final class ComponentUtil {
         }
 
         try {
-            final TextComponent component = SerializerVersion.V1_19_4.toComponent(element);
-            return trimStrings(SerializerVersion.V1_20_3.toTag(component));
+            // Arch start
+            final String key = ConversionCache.ENABLED ? element.toString() : null;
+            if (key == null || !cacheable(key)) {
+                return convertJsonToTag(element);
+            }
+
+            final Tag tag = JSON_TO_TAG.get(key, ignored -> convertJsonToTag(element));
+            return tag != null ? tag.copy() : null;
+            // Arch end
         } catch (final Exception e) {
             if (Via.getConfig().logTextComponentConversionErrors()) {
                 Via.getPlatform().getLogger().log(Level.SEVERE, "Error converting component: " + StringUtil.forLogging(element), e);
             }
             return new StringTag("<error>");
         }
+    }
+
+    private static @Nullable Tag convertJsonToTag(final JsonElement element) {
+        final TextComponent component = SerializerVersion.V1_19_4.toComponent(element);
+        return trimStrings(SerializerVersion.V1_20_3.toTag(component));
     }
 
     public static Tag trimStrings(final Tag input) {
@@ -126,7 +161,14 @@ public final class ComponentUtil {
         if (json == null) {
             return null;
         }
-        return to.toTag(from.jsonSerializer.deserialize(json));
+        // Arch start
+        if (!cacheable(json)) {
+            return to.toTag(from.jsonSerializer.deserialize(json));
+        }
+
+        final Tag tag = JSON_STRING_TO_TAG.get(new VersionedInput(json, from, to), input -> to.toTag(from.jsonSerializer.deserialize(json)));
+        return tag != null ? tag.copy() : null;
+        // Arch end
     }
 
     public static @Nullable JsonElement convertJson(@Nullable final JsonElement element, final SerializerVersion from, final SerializerVersion to) {
@@ -138,6 +180,15 @@ public final class ComponentUtil {
     }
 
     public static @Nullable JsonElement convertJsonOrEmpty(@Nullable final String json, final SerializerVersion from, final SerializerVersion to) {
+        // Arch start
+        if (json != null && cacheable(json)) {
+            return JSON_OR_EMPTY.get(new VersionedInput(json, from, to), input -> convertJsonOrEmptyUncached(json, from, to)).deepCopy();
+        }
+        return convertJsonOrEmptyUncached(json, from, to);
+    }
+
+    private static JsonElement convertJsonOrEmptyUncached(@Nullable final String json, final SerializerVersion from, final SerializerVersion to) {
+        // Arch end
         final TextComponent component = from.toComponent(json);
         if (component == null) {
             return emptyJsonComponent();
@@ -184,6 +235,15 @@ public final class ComponentUtil {
     }
 
     public static JsonElement legacyToJson(final String message) {
+        // Arch start
+        if (cacheable(message)) {
+            return LEGACY_TO_JSON.get(message, ComponentUtil::legacyToJsonUncached).deepCopy();
+        }
+        return legacyToJsonUncached(message);
+    }
+
+    private static JsonElement legacyToJsonUncached(final String message) {
+        // Arch end
         return SerializerVersion.V1_12.toJson(StringFormat.vanilla().fromString(message, ColorHandling.RESET, DeserializerUnknownHandling.WHITE));
     }
 
@@ -192,6 +252,15 @@ public final class ComponentUtil {
     }
 
     public static String legacyToJsonString(final String message, final boolean itemData) {
+        // Arch start
+        if (cacheable(message)) {
+            return LEGACY_TO_JSON_STRING.get(new LegacyInput(message, itemData), input -> legacyToJsonStringUncached(message, itemData));
+        }
+        return legacyToJsonStringUncached(message, itemData);
+    }
+
+    private static String legacyToJsonStringUncached(final String message, final boolean itemData) {
+        // Arch end
         final TextComponent component = StringFormat.vanilla().fromString(message, ColorHandling.RESET, DeserializerUnknownHandling.WHITE);
         if (itemData) {
             TextUtils.iterateAll(component, c -> {
