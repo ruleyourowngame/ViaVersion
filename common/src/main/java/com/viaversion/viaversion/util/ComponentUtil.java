@@ -61,6 +61,9 @@ public final class ComponentUtil {
     private static final ConversionCache<VersionedInput, JsonElement> JSON_OR_EMPTY = new ConversionCache<>(CACHE_CAPACITY);
     private static final ConversionCache<String, JsonElement> LEGACY_TO_JSON = new ConversionCache<>(CACHE_CAPACITY);
     private static final ConversionCache<LegacyInput, String> LEGACY_TO_JSON_STRING = new ConversionCache<>(CACHE_CAPACITY);
+    // ViaBackwards turns every entity custom name sent to a 1.12 client back into legacy text.
+    private static final ConversionCache<String, String> JSON_STRING_TO_LEGACY = new ConversionCache<>(CACHE_CAPACITY);
+    private static final ConversionCache<String, String> JSON_TO_LEGACY = new ConversionCache<>(CACHE_CAPACITY);
 
     private record VersionedInput(String input, SerializerVersion from, SerializerVersion to) {
     }
@@ -335,10 +338,29 @@ public final class ComponentUtil {
     }
 
     public static String jsonToLegacy(final String value) {
+        // Arch start
+        if (cacheable(value)) {
+            return JSON_STRING_TO_LEGACY.get(value, ComponentUtil::jsonStringToLegacyUncached);
+        }
+        return jsonStringToLegacyUncached(value);
+    }
+
+    private static String jsonStringToLegacyUncached(final String value) {
+        // Arch end
         return TextComponentSerializer.V1_12.deserializeReader(value).asLegacyFormatString();
     }
 
     public static String jsonToLegacy(final JsonElement value) {
+        // Arch start
+        final String key = ConversionCache.ENABLED ? boundedJson(value) : null;
+        if (key != null) {
+            return JSON_TO_LEGACY.get(key, ignored -> jsonToLegacyUncached(value));
+        }
+        return jsonToLegacyUncached(value);
+    }
+
+    private static String jsonToLegacyUncached(final JsonElement value) {
+        // Arch end
         return SerializerVersion.V1_12.toComponent(value).asLegacyFormatString();
     }
 
