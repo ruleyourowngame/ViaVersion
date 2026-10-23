@@ -79,6 +79,16 @@ class ComponentUtilCacheTest extends PlatformTestBase {
     }
 
     @Test
+    void oversizedElementsStillConvert() {
+        final String text = "x".repeat(10_000);
+        final JsonObject element = new JsonObject();
+        element.addProperty("text", text);
+
+        // A plain text component becomes a bare string tag from 1.20.3.
+        Assertions.assertEquals(text, ComponentUtil.jsonToTag(element).getValue());
+    }
+
+    @Test
     void legacyConversionsAreStable() {
         final String legacy = "§7Kills: §f§l12";
         final JsonElement first = ComponentUtil.legacyToJson(legacy);

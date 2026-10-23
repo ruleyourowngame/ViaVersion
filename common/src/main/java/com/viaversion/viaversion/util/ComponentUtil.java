@@ -17,7 +17,10 @@
  */
 package com.viaversion.viaversion.util;
 
+import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
 import com.google.gson.JsonElement;
+import com.google.gson.JsonIOException;
 import com.google.gson.JsonObject;
 import com.viaversion.nbt.tag.CompoundTag;
 import com.viaversion.nbt.tag.StringTag;
@@ -35,6 +38,7 @@ import com.viaversion.viaversion.libs.mcstructs.text.stringformat.StringFormat;
 import com.viaversion.viaversion.libs.mcstructs.text.stringformat.handling.ColorHandling;
 import com.viaversion.viaversion.libs.mcstructs.text.stringformat.handling.DeserializerUnknownHandling;
 import com.viaversion.viaversion.libs.mcstructs.text.utils.TextUtils;
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.logging.Level;
 import org.checkerframework.checker.nullness.qual.Nullable;
@@ -66,6 +70,64 @@ public final class ComponentUtil {
 
     private static boolean cacheable(final String input) {
         return ConversionCache.ENABLED && input.length() <= MAX_CACHED_INPUT;
+    }
+
+    private static final Gson KEY_GSON = new GsonBuilder().disableHtmlEscaping().create();
+
+    /** {@code element} as JSON, or null as soon as it passes {@link #MAX_CACHED_INPUT}, without writing the rest. */
+    private static @Nullable String boundedJson(final JsonElement element) {
+        final BoundedAppendable out = new BoundedAppendable();
+        try {
+            KEY_GSON.toJson(element, out);
+            return out.builder.toString();
+        } catch (final JsonIOException e) {
+            if (e.getCause() == BoundedAppendable.FULL) {
+                return null;
+            }
+            throw e;
+        }
+    }
+
+    private static final class BoundedAppendable implements Appendable {
+
+        private static final IOException FULL = new KeyTooLong();
+
+        private final StringBuilder builder = new StringBuilder(128);
+
+        @Override
+        public Appendable append(final CharSequence csq) throws IOException {
+            return append(csq, 0, csq.length());
+        }
+
+        @Override
+        public Appendable append(final CharSequence csq, final int start, final int end) throws IOException {
+            if (builder.length() + (end - start) > MAX_CACHED_INPUT) {
+                throw FULL;
+            }
+            builder.append(csq, start, end);
+            return this;
+        }
+
+        @Override
+        public Appendable append(final char c) throws IOException {
+            if (builder.length() + 1 > MAX_CACHED_INPUT) {
+                throw FULL;
+            }
+            builder.append(c);
+            return this;
+        }
+    }
+
+    private static final class KeyTooLong extends IOException {
+
+        private KeyTooLong() {
+            super("cache key too long");
+        }
+
+        @Override
+        public synchronized Throwable fillInStackTrace() {
+            return this;
+        }
     }
     // Arch end
 
@@ -102,8 +164,8 @@ public final class ComponentUtil {
 
         try {
             // Arch start
-            final String key = ConversionCache.ENABLED ? element.toString() : null;
-            if (key == null || !cacheable(key)) {
+            final String key = ConversionCache.ENABLED ? boundedJson(element) : null;
+            if (key == null) {
                 return convertJsonToTag(element);
             }
 
