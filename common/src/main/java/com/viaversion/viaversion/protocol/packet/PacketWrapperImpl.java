@@ -310,7 +310,13 @@ public class PacketWrapperImpl implements PacketWrapper {
         if (currentThread) {
             sendNow(protocol, skipCurrentPipeline);
         } else {
-            connection.getChannel().eventLoop().execute(() -> sendNow(protocol, skipCurrentPipeline));
+            connection.getChannel().eventLoop().execute(() -> {
+                // By the time a scheduled send runs the channel may have closed, and the connection's
+                // stored objects are cleared on close, so the pipeline would mangle the packet
+                if (connection.getChannel().isActive()) {
+                    sendNow(protocol, skipCurrentPipeline);
+                }
+            });
         }
     }
 
