@@ -27,6 +27,7 @@ import com.viaversion.viaversion.protocols.v1_19_3to1_19_4.packet.ServerboundPac
 import com.viaversion.viaversion.protocols.v1_20to1_20_2.Protocol1_20To1_20_2;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
+import io.netty.channel.Channel;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
@@ -50,6 +51,7 @@ public class ConfigurationState implements StorableObject {
     private final long maxClientboundBytes;
     private final long maxClientboundQueueNanos;
     private final LongSupplier nanoClock;
+    private final DeadlineScheduler deadlineScheduler;
     private BridgePhase bridgePhase = BridgePhase.NONE;
     private QueuedPacket joinGamePacket;
     private boolean queuedJoinGame;
@@ -60,16 +62,22 @@ public class ConfigurationState implements StorableObject {
     private long queuedClientboundBytes;
     private int queuedClientboundPackets;
     private long bridgeStartNanos;
+    // Bumped whenever the client enters or leaves a bridge phase, so a deadline armed for an earlier phase
+    // does nothing once that phase is over
+    private int bridgeGeneration;
 
     public ConfigurationState() {
-        this(MAX_CLIENTBOUND_QUEUED_PACKETS, MAX_CLIENTBOUND_QUEUED_BYTES, TimeUnit.SECONDS.toNanos(MAX_CLIENTBOUND_QUEUE_SECONDS), System::nanoTime);
+        this(MAX_CLIENTBOUND_QUEUED_PACKETS, MAX_CLIENTBOUND_QUEUED_BYTES, TimeUnit.SECONDS.toNanos(MAX_CLIENTBOUND_QUEUE_SECONDS),
+            System::nanoTime, ConfigurationState::scheduleOnEventLoop);
     }
 
-    ConfigurationState(final int maxClientboundPackets, final long maxClientboundBytes, final long maxClientboundQueueNanos, final LongSupplier nanoClock) {
+    ConfigurationState(final int maxClientboundPackets, final long maxClientboundBytes, final long maxClientboundQueueNanos,
+                       final LongSupplier nanoClock, final DeadlineScheduler deadlineScheduler) {
         this.maxClientboundPackets = maxClientboundPackets;
         this.maxClientboundBytes = maxClientboundBytes;
         this.maxClientboundQueueNanos = maxClientboundQueueNanos;
         this.nanoClock = nanoClock;
+        this.deadlineScheduler = deadlineScheduler;
     }
 
     public BridgePhase bridgePhase() {
@@ -77,11 +85,45 @@ public class ConfigurationState implements StorableObject {
     }
 
     public void setBridgePhase(final BridgePhase bridgePhase) {
+        if ((this.bridgePhase == BridgePhase.NONE) != (bridgePhase == BridgePhase.NONE)) {
+            bridgeGeneration++;
+        }
         if (this.bridgePhase == BridgePhase.NONE && bridgePhase != BridgePhase.NONE) {
             // Leaving play: the client is now waiting on us to finish a configuration phase
             bridgeStartNanos = nanoClock.getAsLong();
         }
         this.bridgePhase = bridgePhase;
+    }
+
+    /**
+     * Sets the bridge phase and, when this moves the client out of play, disconnects it if it is still in a bridge
+     * phase once the queue deadline passes. The check in {@link #addClientboundPacketToQueue(PacketWrapper)} only
+     * runs when the server sends something, so it alone would never catch a stuck client on a quiet server.
+     *
+     * @param user        connection the phase belongs to
+     * @param bridgePhase new bridge phase
+     */
+    public void setBridgePhase(final UserConnection user, final BridgePhase bridgePhase) {
+        final boolean leavingPlay = this.bridgePhase == BridgePhase.NONE && bridgePhase != BridgePhase.NONE;
+        setBridgePhase(bridgePhase);
+        if (!leavingPlay) {
+            return;
+        }
+
+        final int generation = bridgeGeneration;
+        deadlineScheduler.schedule(user, () -> {
+            if (generation == bridgeGeneration && this.bridgePhase != BridgePhase.NONE) {
+                user.disconnect("Took too long to finish configuration");
+            }
+        }, maxClientboundQueueNanos);
+    }
+
+    private static void scheduleOnEventLoop(final UserConnection user, final Runnable task, final long delayNanos) {
+        final Channel channel = user.getChannel();
+        if (channel != null) {
+            // Same thread as the packet handling that changes the phase
+            channel.eventLoop().schedule(task, delayNanos, TimeUnit.NANOSECONDS);
+        }
     }
 
     public @Nullable CompoundTag lastDimensionRegistry() {
@@ -132,6 +174,7 @@ public class ConfigurationState implements StorableObject {
         final QueuedPacket queued = toQueuedPacket(wrapper, false, false);
         final int bytes = queued.buf().readableBytes();
         if (queuedServerboundPackets >= MAX_SERVERBOUND_QUEUED_PACKETS || queuedServerboundBytes + bytes > MAX_SERVERBOUND_QUEUED_BYTES) {
+            queued.buf().release();
             wrapper.user().disconnect("Sent too many packets during config phase");
             return;
         }
@@ -179,10 +222,7 @@ public class ConfigurationState implements StorableObject {
             packetQueue.add(hasJoinGamePacket ? 1 : 0, toQueuedPacket(clientInformationPacket, false, true));
         }
 
-        final QueuedPacket[] queuedPackets = packetQueue.toArray(EMPTY_PACKET_ARRAY);
-        packetQueue.clear();
-        resetQueueCounters();
-
+        final QueuedPacket[] queuedPackets = drainQueue();
         for (final QueuedPacket packet : queuedPackets) {
             final PacketWrapper queuedWrapper;
             try {
@@ -204,8 +244,23 @@ public class ConfigurationState implements StorableObject {
         }
     }
 
+    /**
+     * Empties the queue and gives the next batch of queued packets a full budget.
+     *
+     * @return the packets that were queued, which the caller now owns and must release
+     */
+    QueuedPacket[] drainQueue() {
+        final QueuedPacket[] queuedPackets = packetQueue.toArray(EMPTY_PACKET_ARRAY);
+        packetQueue.clear();
+        resetQueueCounters();
+        return queuedPackets;
+    }
+
     public void clear() {
         packetQueue.clear();
+        if (bridgePhase != BridgePhase.NONE) {
+            bridgeGeneration++;
+        }
         bridgePhase = BridgePhase.NONE;
         queuedJoinGame = false;
         resetQueueCounters();
@@ -224,6 +279,11 @@ public class ConfigurationState implements StorableObject {
 
     public boolean queuedOrSentJoinGame() {
         return queuedJoinGame;
+    }
+
+    @FunctionalInterface
+    interface DeadlineScheduler {
+        void schedule(UserConnection user, Runnable task, long delayNanos);
     }
 
     public enum BridgePhase {

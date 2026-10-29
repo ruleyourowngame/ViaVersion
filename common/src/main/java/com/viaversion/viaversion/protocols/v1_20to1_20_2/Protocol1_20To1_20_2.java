@@ -144,7 +144,7 @@ public final class Protocol1_20To1_20_2 extends AbstractProtocol<ClientboundPack
         // during the configuration phase before finally transitioning to the play state with the client as well.
         registerClientbound(State.LOGIN, ClientboundLoginPackets.LOGIN_FINISHED, wrapper -> {
             final ProtocolStorables1_20_2 storables = wrapper.user().storables(this);
-            storables.configurationState().setBridgePhase(BridgePhase.PROFILE_SENT);
+            storables.configurationState().setBridgePhase(wrapper.user(), BridgePhase.PROFILE_SENT);
             wrapper.user().getProtocolInfo().setServerState(State.PLAY);
         });
 

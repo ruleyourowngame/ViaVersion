@@ -115,7 +115,7 @@ public final class EntityPacketRewriter1_20_2 extends EntityRewriter<Clientbound
                         final PacketWrapper configurationPacket = wrapper.create(ClientboundPackets1_20_2.START_CONFIGURATION);
                         configurationPacket.send(Protocol1_20To1_20_2.class);
 
-                        configurationBridge.setBridgePhase(ConfigurationState.BridgePhase.REENTERING_CONFIGURATION);
+                        configurationBridge.setBridgePhase(wrapper.user(), ConfigurationState.BridgePhase.REENTERING_CONFIGURATION);
                         configurationBridge.setJoinGamePacket(wrapper);
                         wrapper.cancel();
                         return;

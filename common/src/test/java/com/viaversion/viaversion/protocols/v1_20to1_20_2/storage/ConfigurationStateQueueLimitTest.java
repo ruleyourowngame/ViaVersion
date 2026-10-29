@@ -21,9 +21,12 @@ import com.viaversion.viaversion.api.protocol.packet.PacketWrapper;
 import com.viaversion.viaversion.common.PlatformTestBase;
 import com.viaversion.viaversion.connection.UserConnectionImpl;
 import com.viaversion.viaversion.protocols.v1_20to1_20_2.storage.ConfigurationState.BridgePhase;
+import com.viaversion.viaversion.protocols.v1_20to1_20_2.storage.ConfigurationState.QueuedPacket;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.channel.embedded.EmbeddedChannel;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import org.junit.jupiter.api.BeforeEach;
@@ -42,6 +45,8 @@ class ConfigurationStateQueueLimitTest extends PlatformTestBase {
     private static final long TIMEOUT_NANOS = TimeUnit.SECONDS.toNanos(90);
 
     private final AtomicLong clock = new AtomicLong(1_000L);
+    // Deadline tasks the state armed, run by hand to stand in for the event loop firing them
+    private final List<Runnable> deadlines = new ArrayList<>();
     private EmbeddedChannel channel;
     private UserConnectionImpl user;
 
@@ -157,8 +162,92 @@ class ConfigurationStateQueueLimitTest extends PlatformTestBase {
         assertFalse(user.isPendingDisconnect());
     }
 
+    @Test
+    void disconnectsQuietClientAtDeadline() {
+        // Nothing else is queued after the phase starts, so only the scheduled deadline can catch this client
+        final ConfigurationState state = state(1000, 1024 * 1024);
+        state.setBridgePhase(user, BridgePhase.PROFILE_SENT);
+        state.addClientboundPacketToQueue(packet(16));
+        state.setBridgePhase(user, BridgePhase.CONFIGURATION);
+
+        assertEquals(1, deadlines.size(), "only leaving play arms a deadline");
+        assertFalse(user.isPendingDisconnect());
+
+        runDeadlines();
+
+        assertTrue(user.isPendingDisconnect());
+    }
+
+    @Test
+    void deadlineIsHarmlessOnceConfigurationFinished() {
+        final ConfigurationState state = state(1000, 1024 * 1024);
+        state.setBridgePhase(user, BridgePhase.REENTERING_CONFIGURATION);
+        state.setBridgePhase(user, BridgePhase.CONFIGURATION);
+        // FINISH_CONFIGURATION
+        state.setBridgePhase(user, BridgePhase.NONE);
+        state.clear();
+
+        runDeadlines();
+
+        assertFalse(user.isPendingDisconnect());
+    }
+
+    @Test
+    void earlierPhaseDeadlineDoesNotCutShortTheNextPhase() {
+        final ConfigurationState state = state(1000, 1024 * 1024);
+        state.setBridgePhase(user, BridgePhase.REENTERING_CONFIGURATION);
+        final Runnable firstPhaseDeadline = deadlines.get(0);
+        state.clear();
+        state.setBridgePhase(user, BridgePhase.REENTERING_CONFIGURATION);
+
+        firstPhaseDeadline.run();
+        assertFalse(user.isPendingDisconnect());
+
+        // The second phase's own deadline still applies
+        deadlines.get(1).run();
+        assertTrue(user.isPendingDisconnect());
+    }
+
+    @Test
+    void drainResetsBudgetForPacketsQueuedAfterwards() {
+        // LOGIN_ACKNOWLEDGED drains the queue while the client is still in configuration and packets keep being
+        // queued until it finishes, so the drain has to hand those packets a fresh budget
+        final ConfigurationState state = state(5, 1024);
+        state.setBridgePhase(user, BridgePhase.PROFILE_SENT);
+        for (int i = 0; i < 5; i++) {
+            state.addClientboundPacketToQueue(packet(16));
+        }
+
+        final QueuedPacket[] drained = state.drainQueue();
+        for (final QueuedPacket packet : drained) {
+            packet.buf().release();
+        }
+        assertEquals(5, drained.length);
+        assertEquals(0, state.queuedClientboundPackets());
+
+        state.setBridgePhase(user, BridgePhase.CONFIGURATION);
+        for (int i = 0; i < 5; i++) {
+            state.addClientboundPacketToQueue(packet(16));
+        }
+        assertEquals(5, state.queuedClientboundPackets());
+        assertFalse(user.isPendingDisconnect(), "a full budget again after the drain");
+
+        state.addClientboundPacketToQueue(packet(16));
+        assertTrue(user.isPendingDisconnect(), "but no more than one");
+    }
+
+    private void runDeadlines() {
+        clock.addAndGet(TIMEOUT_NANOS + 1);
+        for (final Runnable deadline : new ArrayList<>(deadlines)) {
+            deadline.run();
+        }
+    }
+
     private ConfigurationState state(final int maxPackets, final long maxBytes) {
-        return new ConfigurationState(maxPackets, maxBytes, TIMEOUT_NANOS, clock::get);
+        return new ConfigurationState(maxPackets, maxBytes, TIMEOUT_NANOS, clock::get, (user, task, delayNanos) -> {
+            assertEquals(TIMEOUT_NANOS, delayNanos);
+            deadlines.add(task);
+        });
     }
 
     private PacketWrapper packet(final int size) {
