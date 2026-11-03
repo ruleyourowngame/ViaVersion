@@ -38,17 +38,16 @@ import com.viaversion.viaversion.util.PipelineUtil;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.ChannelFuture;
 import java.io.IOException;
-import java.util.ArrayDeque;
 import java.util.ArrayList;
-import java.util.Deque;
 import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
 import org.checkerframework.checker.nullness.qual.Nullable;
 
 public class PacketWrapperImpl implements PacketWrapper {
-    private final Deque<PacketValue<?>> readableObjects = new ArrayDeque<>();
-    private final List<PacketValue<?>> packetValues = new ArrayList<>();
+    private ArrayList<PacketValue<?>> readableObjects = new ArrayList<>();
+    private ArrayList<PacketValue<?>> packetValues = new ArrayList<>();
+    private int readableIndex;
     private final ByteBuf inputBuffer;
     private final UserConnection userConnection;
     private boolean send = true;
@@ -109,7 +108,8 @@ public class PacketWrapperImpl implements PacketWrapper {
     @Override
     public boolean isReadable(Type type, int index) {
         int currentIndex = 0;
-        for (PacketValue<?> packetValue : readableObjects) {
+        for (int i = readableIndex; i < readableObjects.size(); i++) {
+            PacketValue<?> packetValue = readableObjects.get(i);
             if (packetValue.type().getBaseClass() != type.getBaseClass()) {
                 continue;
             }
@@ -140,7 +140,7 @@ public class PacketWrapperImpl implements PacketWrapper {
 
     @Override
     public <T> T read(Type<T> type) {
-        return readableObjects.isEmpty() ? readFromBuffer(type) : pollReadableObject(type).value;
+        return readableIndex == readableObjects.size() ? readFromBuffer(type) : pollReadableObject(type).value;
     }
 
     private <T> T readFromBuffer(Type<T> type) {
@@ -153,7 +153,7 @@ public class PacketWrapperImpl implements PacketWrapper {
     }
 
     private <T> PacketValue<T> pollReadableObject(Type<T> type) {
-        PacketValue<?> readValue = readableObjects.poll();
+        PacketValue<?> readValue = readableObjects.set(readableIndex++, null);
         Type<?> readType = readValue.type();
         if (readType == type
             || (type.getBaseClass() == readType.getBaseClass()
@@ -161,7 +161,7 @@ public class PacketWrapperImpl implements PacketWrapper {
             //noinspection unchecked
             return (PacketValue<T>) readValue;
         } else {
-            throw createInformativeException(new IOException("Unable to read type " + type.getTypeName() + ", found " + readValue.type().getTypeName()), type, readableObjects.size());
+            throw createInformativeException(new IOException("Unable to read type " + type.getTypeName() + ", found " + readValue.type().getTypeName()), type, readableObjects.size() - readableIndex);
         }
     }
 
@@ -193,7 +193,7 @@ public class PacketWrapperImpl implements PacketWrapper {
 
     @Override
     public <T> T passthrough(Type<T> type) throws InformativeException {
-        if (readableObjects.isEmpty()) {
+        if (readableIndex == readableObjects.size()) {
             T value = readFromBuffer(type);
             addPacketValue(new PacketValue<>(type, value));
             return value;
@@ -225,8 +225,7 @@ public class PacketWrapperImpl implements PacketWrapper {
     @Override
     public void passthroughAll() throws InformativeException {
         // Copy previous objects
-        packetValues.addAll(readableObjects);
-        readableObjects.clear();
+        appendUnreadValues();
         // If the buffer has readable bytes, copy them.
         if (inputBuffer.isReadable()) {
             passthrough(Types.REMAINING_BYTES);
@@ -243,16 +242,15 @@ public class PacketWrapperImpl implements PacketWrapper {
 
     public boolean areStoredPacketValuesEmpty() {
         // Check for read/added packet values, not the input buffer
-        return packetValues.isEmpty() && readableObjects.isEmpty();
+        return packetValues.isEmpty() && readableIndex == readableObjects.size();
     }
 
     public void writeProcessedValues(ByteBuf buffer) throws InformativeException {
         if (id != -1) {
             Types.VAR_INT.writePrimitive(buffer, id);
         }
-        if (!readableObjects.isEmpty()) {
-            packetValues.addAll(readableObjects);
-            readableObjects.clear();
+        if (readableIndex != readableObjects.size()) {
+            appendUnreadValues();
         }
 
         for (int i = 0; i < packetValues.size(); i++) {
@@ -282,7 +280,8 @@ public class PacketWrapperImpl implements PacketWrapper {
         if (inputBuffer != null) {
             inputBuffer.clear();
         }
-        readableObjects.clear(); // :(
+        readableObjects.clear();
+        readableIndex = 0;
     }
 
     @Override
@@ -482,11 +481,22 @@ public class PacketWrapperImpl implements PacketWrapper {
 
     @Override
     public void resetReader() {
-        // Move all packet values to the readable for next Protocol
-        for (int i = packetValues.size() - 1; i >= 0; i--) {
-            this.readableObjects.addFirst(this.packetValues.get(i));
+        appendUnreadValues();
+        // Size the recycled writer from the known field count, avoiding independent
+        // incremental growth when both buffers first pass through the protocol chain.
+        readableObjects.ensureCapacity(packetValues.size());
+        ArrayList<PacketValue<?>> previousRead = readableObjects;
+        readableObjects = packetValues;
+        packetValues = previousRead;
+        readableIndex = 0;
+    }
+
+    private void appendUnreadValues() {
+        for (int i = readableIndex; i < readableObjects.size(); i++) {
+            packetValues.add(readableObjects.get(i));
         }
-        this.packetValues.clear();
+        readableObjects.clear();
+        readableIndex = 0;
     }
 
     @Override
@@ -494,12 +504,24 @@ public class PacketWrapperImpl implements PacketWrapper {
         if (allActionsRead) {
             return;
         }
-
         final int size = packetValues.size();
-        Preconditions.checkArgument(values <= size, "Tried resetting more values than there are readable values");
-        for (int i = size - 1; i >= size - values; i--) {
-            this.readableObjects.addFirst(this.packetValues.remove(i));
+        Preconditions.checkArgument(values >= 0 && values <= size, "Tried resetting more values than there are readable values");
+        if (values == 0) {
+            return;
         }
+        // The common resetReader path swaps buffers. Rewind must also keep the written
+        // prefix, so rebuild only this less frequent partial-reader operation.
+        List<PacketValue<?>> rewound = new ArrayList<>(values + readableObjects.size() - readableIndex);
+        for (int i = size - values; i < size; i++) {
+            rewound.add(packetValues.get(i));
+        }
+        for (int i = readableIndex; i < readableObjects.size(); i++) {
+            rewound.add(readableObjects.get(i));
+        }
+        packetValues.subList(size - values, size).clear();
+        readableObjects.clear();
+        readableObjects.addAll(rewound);
+        readableIndex = 0;
     }
 
     @Override
@@ -625,7 +647,7 @@ public class PacketWrapperImpl implements PacketWrapper {
             "type=" + packetType +
             ", id=" + id +
             ", values=" + packetValues +
-            ", readable=" + readableObjects +
+            ", readable=" + readableObjects.subList(readableIndex, readableObjects.size()) +
             '}';
     }
 
