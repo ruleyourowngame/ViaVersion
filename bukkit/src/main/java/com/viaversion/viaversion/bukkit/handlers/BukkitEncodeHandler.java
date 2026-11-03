@@ -25,7 +25,6 @@ import com.viaversion.viaversion.exception.CancelCodecException;
 import com.viaversion.viaversion.exception.CancelEncoderException;
 import com.viaversion.viaversion.exception.InformativeException;
 import com.viaversion.viaversion.platform.ViaEncodeHandler;
-import com.viaversion.viaversion.util.ByteBufUtil;
 import com.viaversion.viaversion.util.PipelineUtil;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.ChannelHandler;
@@ -54,7 +53,7 @@ public final class BukkitEncodeHandler extends ViaEncodeHandler {
             return;
         }
 
-        final ByteBuf transformedBuf = ByteBufUtil.copy(ctx.alloc(), bytebuf);
+        final ByteBuf transformedBuf = BlueprintBufferOwnership.prepare(ctx.channel(), bytebuf, ctx.alloc());
         try {
             final boolean needsCompression = !handledCompression && connection.getProtocolInfo().compressionEnabled() && handleCompressionOrder(ctx, transformedBuf);
             connection.transformClientbound(transformedBuf, CancelEncoderException::generate);
