@@ -481,6 +481,9 @@ public class PacketWrapperImpl implements PacketWrapper {
 
     @Override
     public void resetReader() {
+        if (packetValues.isEmpty()) {
+            return;
+        }
         appendUnreadValues();
         // Size the recycled writer from the known field count, avoiding independent
         // incremental growth when both buffers first pass through the protocol chain.

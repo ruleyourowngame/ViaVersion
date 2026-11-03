@@ -47,6 +47,28 @@ final class PacketFieldCursorTest {
     }
 
     @Test
+    void unchangedStagesKeepUnreadTailAfterDiscardedFields() {
+        PacketWrapperImpl packet = new PacketWrapperImpl(-1, null, null);
+        packet.write(Types.INT, 1);
+        packet.write(Types.INT, 2);
+        packet.write(Types.INT, 3);
+        packet.resetReader();
+        assertEquals(1, packet.read(Types.INT));
+        for (int i = 0; i < 100; i++) {
+            packet.setId(i);
+            packet.resetReader();
+        }
+        assertEquals(2, packet.read(Types.INT));
+        packet.resetReader();
+        assertEquals(3, packet.read(Types.INT));
+        assertTrue(packet.areStoredPacketValuesEmpty());
+        packet.resetReader();
+        packet.write(Types.INT, 4);
+        packet.resetReader();
+        assertEquals(4, packet.read(Types.INT));
+    }
+
+    @Test
     void rewindKeepsWrittenPrefixAndUnreadTail() {
         PacketWrapperImpl packet = new PacketWrapperImpl(-1, null, null);
         for (int i = 1; i <= 4; i++) packet.write(Types.INT, i);
