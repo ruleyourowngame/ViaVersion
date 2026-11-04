@@ -45,6 +45,7 @@ import com.viaversion.viaversion.api.type.Type;
 import com.viaversion.viaversion.api.type.Types;
 import com.viaversion.viaversion.data.entity.DimensionDataImpl;
 import com.viaversion.viaversion.rewriter.entitydata.EntityDataFilter;
+import com.viaversion.viaversion.rewriter.entitydata.EntityDataHandler;
 import com.viaversion.viaversion.rewriter.entitydata.EntityDataHandlerEvent;
 import com.viaversion.viaversion.rewriter.entitydata.EntityDataHandlerEventImpl;
 import com.viaversion.viaversion.util.Key;
@@ -131,13 +132,19 @@ public abstract class EntityRewriter<C extends ClientboundPacketType, T extends 
                 if (!filter.isFiltered(type, entityData)) {
                     continue;
                 }
-                if (event == null) {
-                    // Instantiate lazily and share event instance
-                    event = new EntityDataHandlerEventImpl(connection, entity, entityId, entityData, dataList);
-                }
-
+                final EntityDataHandler handler = filter.handler();
+                final boolean cancelEntry;
                 try {
-                    filter.handler().handle(event, entityData);
+                    if (handler instanceof EntityDataHandler.Direct direct) {
+                        cancelEntry = direct.handleData(connection, entity != null ? entity.entityType() : null, entityData);
+                    } else {
+                        if (event == null) {
+                            // Instantiate lazily; custom callbacks share an event only within this entry.
+                            event = new EntityDataHandlerEventImpl(connection, entity, entityId, entityData, dataList);
+                        }
+                        handler.handle(event, entityData);
+                        cancelEntry = false;
+                    }
                 } catch (final Exception e) {
                     logException(e, type, dataList, entityData);
                     dataList.remove(i--);
@@ -145,7 +152,9 @@ public abstract class EntityRewriter<C extends ClientboundPacketType, T extends 
                     break;
                 }
 
-                if (event.cancelled()) {
+                if (cancelEntry || event != null && event.cancelled()) {
+                    // A preceding custom callback may retain its event and observe cancellation.
+                    if (event != null) event.cancel();
                     // Remove entity data, and break current filter loop
                     dataList.remove(i--);
                     size--;
@@ -255,10 +264,10 @@ public abstract class EntityRewriter<C extends ClientboundPacketType, T extends 
     public void registerEntityDataTypeHandler(@Nullable EntityDataType itemType, @Nullable EntityDataType blockStateType, @Nullable EntityDataType optionalBlockStateType,
                                               @Nullable EntityDataType particleType, @Nullable EntityDataType particlesType,
                                               @Nullable EntityDataType componentType, @Nullable EntityDataType optionalComponentType) {
-        filter().handler((event, data) -> {
+        filter().handlerDirect((connection, entityType, data) -> {
             final EntityDataType type = data.dataType();
             if (type == itemType) {
-                data.setValue(protocol.getItemRewriter().handleItemToClient(event.user(), data.value()));
+                data.setValue(protocol.getItemRewriter().handleItemToClient(connection, data.value()));
             } else if (type == blockStateType) {
                 int value = data.value();
                 data.setValue(protocol.getMappingData().getNewBlockStateId(value));
@@ -268,25 +277,27 @@ public abstract class EntityRewriter<C extends ClientboundPacketType, T extends 
                     data.setValue(protocol.getMappingData().getNewBlockStateId(value));
                 }
             } else if (type == particleType) {
-                protocol.getParticleRewriter().rewriteParticle(event.user(), data.value());
+                protocol.getParticleRewriter().rewriteParticle(connection, data.value());
             } else if (type == particlesType) {
                 final Particle[] particles = data.value();
                 for (final Particle particle : particles) {
-                    protocol.getParticleRewriter().rewriteParticle(event.user(), particle);
+                    protocol.getParticleRewriter().rewriteParticle(connection, particle);
                 }
             } else if (type == componentType || type == optionalComponentType) {
                 if (protocol.getComponentRewriter() != null) {
                     final Tag component = data.value();
-                    protocol.getComponentRewriter().processTag(event.user(), component);
+                    protocol.getComponentRewriter().processTag(connection, component);
                 }
             }
+            return false;
         });
     }
 
     public void registerBlockStateHandler(final EntityType entityType, final int index) {
-        filter().type(entityType).index(index).handler((event, data) -> {
+        filter().type(entityType).index(index).handlerDirect((connection, type, data) -> {
             final int state = (int) data.getValue();
             data.setValue(protocol.getMappingData().getNewBlockStateId(state));
+            return false;
         });
     }
 
