@@ -31,6 +31,63 @@ import static org.junit.jupiter.api.Assertions.*;
 
 final class PacketFieldCursorTest {
     @Test
+    void wrappedPartialStagesGrowAndSerializeInOrder() {
+        PacketWrapperImpl packet = new PacketWrapperImpl(-1, null, null);
+        for (int i = 0; i < 4; i++) packet.write(Types.INT, i);
+        packet.resetReader();
+        assertEquals(0, packet.read(Types.INT));
+        assertEquals(1, packet.passthrough(Types.INT));
+        for (int i = 4; i < 100; i++) packet.write(Types.INT, i);
+        packet.rewindReader(2);
+        assertEquals(98, packet.read(Types.INT));
+        assertEquals(99, packet.read(Types.INT));
+        packet.resetReader();
+        ByteBuf output = Unpooled.buffer();
+        try {
+            packet.writeProcessedValues(output);
+            assertEquals(1, output.readInt());
+            for (int i = 4; i < 98; i++) assertEquals(i, output.readInt());
+            assertEquals(2, output.readInt());
+            assertEquals(3, output.readInt());
+            assertFalse(output.isReadable());
+        } finally { output.release(); }
+    }
+
+    @Test
+    void clearingInputDiscardsUnreadFieldsAndPreservesWrittenOnes() {
+        PacketWrapperImpl packet = new PacketWrapperImpl(-1, null, null);
+        packet.write(Types.STRING, "discard");
+        packet.write(Types.INT, 2);
+        packet.resetReader();
+        packet.write(Types.INT, 3);
+        packet.clearInputBuffer();
+        assertEquals(3, packet.get(Types.INT, 0));
+        assertFalse(packet.isReadable(Types.STRING, 0));
+        assertThrows(IllegalArgumentException.class, () -> packet.rewindReader(2));
+        assertEquals(3, packet.get(Types.INT, 0));
+        packet.resetReader();
+        assertEquals(3, packet.read(Types.INT));
+        assertTrue(packet.areStoredPacketValuesEmpty());
+    }
+
+    @Test
+    void consumedAndClearedFieldsReleaseTheirReferences() throws Exception {
+        PacketWrapperImpl packet = new PacketWrapperImpl(-1, null, null);
+        for (int i = 0; i < 100; i++) packet.write(Types.STRING, new String(new char[100]));
+        packet.resetReader();
+        for (int i = 0; i < 100; i++) packet.read(Types.STRING);
+        java.lang.reflect.Field storageField = PacketWrapperImpl.class.getDeclaredField("packetValues");
+        storageField.setAccessible(true);
+        Object storage = storageField.get(packet);
+        java.lang.reflect.Field fieldsField = storage.getClass().getDeclaredField("fields");
+        fieldsField.setAccessible(true);
+        for (Object value : (Object[]) fieldsField.get(storage)) assertNull(value);
+        packet.write(Types.STRING, "clear");
+        packet.clearPacket();
+        for (Object value : (Object[]) fieldsField.get(storage)) assertNull(value);
+    }
+
+    @Test
     void compatiblePassthroughKeepsOriginalStoredType() {
         PacketWrapperImpl packet = new PacketWrapperImpl(-1, null, null);
         IntType compatible = new IntType();
