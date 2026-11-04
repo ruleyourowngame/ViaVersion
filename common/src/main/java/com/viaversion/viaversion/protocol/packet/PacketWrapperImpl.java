@@ -735,31 +735,39 @@ public class PacketWrapperImpl implements PacketWrapper {
         void appendUnread() {
             // A partially consumed stage writes its output before its unread tail.
             if (readable != 0 && readable != count) {
-                reverse(0, readable);
-                reverse(readable, count);
-                reverse(0, count);
+                int capacity = fields.length >> 1;
+                if (count != capacity) {
+                    // Copy forwards: a small gap makes the destination overlap the old prefix.
+                    for (int i = 0; i < readable; i++) {
+                        int source = slot(i), target = slot(count + i);
+                        fields[target] = fields[source];
+                        fields[target + 1] = fields[source + 1];
+                        fields[source] = null;
+                        fields[source + 1] = null;
+                    }
+                }
+                head = (head + readable) & (capacity - 1);
             }
             readable = 0;
         }
 
         void rewind(int values) {
             if (values != 0) {
-                // Move the written suffix before the existing unread fields, keeping the prefix written.
-                reverse(0, count - values);
-                reverse(count - values, count);
-                reverse(0, count);
+                int capacity = fields.length >> 1;
+                // Move only the suffix into the gap before the unread head. Copy backwards
+                // because the source and destination overlap when the gap is small.
+                // A full ring already has its suffix immediately before the head.
+                if (count != capacity) {
+                    for (int i = values - 1; i >= 0; i--) {
+                        int source = slot(count - values + i), target = slot(capacity - values + i);
+                        fields[target] = fields[source];
+                        fields[target + 1] = fields[source + 1];
+                        fields[source] = null;
+                        fields[source + 1] = null;
+                    }
+                }
+                head = (head - values) & (capacity - 1);
                 readable += values;
-            }
-        }
-
-        private void reverse(int from, int to) {
-            for (int left = from, right = to - 1; left < right; left++, right--) {
-                int a = slot(left), b = slot(right);
-                Object type = fields[a], value = fields[a + 1];
-                fields[a] = fields[b];
-                fields[a + 1] = fields[b + 1];
-                fields[b] = type;
-                fields[b + 1] = value;
             }
         }
 
