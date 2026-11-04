@@ -223,23 +223,37 @@ public class ConfigurationState implements StorableObject {
         }
 
         final QueuedPacket[] queuedPackets = drainQueue();
-        for (final QueuedPacket packet : queuedPackets) {
-            final PacketWrapper queuedWrapper;
-            try {
-                if (packet.packetType() != null) {
-                    queuedWrapper = PacketWrapper.create(packet.packetType(), packet.buf(), connection);
-                } else {
-                    //noinspection deprecation
-                    queuedWrapper = PacketWrapper.create(packet.packetId(), packet.buf(), connection);
+        int nextPacket = 0;
+        try {
+            while (nextPacket < queuedPackets.length) {
+                // Disconnect can deactivate Via during a preceding send. The bridge then skips
+                // translation while later protocols still run, so replaying old ids corrupts them.
+                if (!connection.isActive() || connection.isPendingDisconnect()) {
+                    break;
                 }
+                final QueuedPacket packet = queuedPackets[nextPacket++];
+                final PacketWrapper queuedWrapper;
+                try {
+                    if (packet.packetType() != null) {
+                        queuedWrapper = PacketWrapper.create(packet.packetType(), packet.buf(), connection);
+                    } else {
+                        //noinspection deprecation
+                        queuedWrapper = PacketWrapper.create(packet.packetId(), packet.buf(), connection);
+                    }
 
-                if (packet.clientbound()) {
-                    queuedWrapper.send(Protocol1_20To1_20_2.class, packet.skipCurrentPipeline());
-                } else {
-                    queuedWrapper.sendToServer(Protocol1_20To1_20_2.class, packet.skipCurrentPipeline());
+                    if (packet.clientbound()) {
+                        queuedWrapper.send(Protocol1_20To1_20_2.class, packet.skipCurrentPipeline());
+                    } else {
+                        queuedWrapper.sendToServer(Protocol1_20To1_20_2.class, packet.skipCurrentPipeline());
+                    }
+                } finally {
+                    packet.buf().release();
                 }
-            } finally {
-                packet.buf().release();
+            }
+        } finally {
+            // The drained batch is no longer owned by onRemove, including when a send throws.
+            while (nextPacket < queuedPackets.length) {
+                queuedPackets[nextPacket++].buf().release();
             }
         }
     }
