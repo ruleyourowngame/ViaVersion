@@ -68,9 +68,16 @@ public final class UpdateUtil {
             return console ? new Pair<>(Level.WARNING, "Could not check for updates, check your connection.") : null;
         }
 
+        String version = Via.getPlatform().getPluginVersion();
+        // Our builds (ruleyourowngame/ViaVersion) are as new as the release they're built on
+        final int arch = version.indexOf("-arch");
+        if (arch != -1) {
+            version = version.substring(0, arch);
+        }
+
         Version current;
         try {
-            current = new Version(Via.getPlatform().getPluginVersion());
+            current = new Version(version);
         } catch (IllegalArgumentException e) {
             return new Pair<>(Level.INFO, "You are using a custom version, consider updating.");
         }

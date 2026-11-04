@@ -29,6 +29,7 @@ import com.viaversion.viaversion.api.protocol.remapper.PacketHandlers;
 import com.viaversion.viaversion.api.rewriter.ItemRewriter;
 import com.viaversion.viaversion.api.type.Type;
 import com.viaversion.viaversion.api.type.Types;
+import com.viaversion.viaversion.protocol.legacy.LegacyDustHandler;
 
 public class ParticleRewriter<C extends ClientboundPacketType> implements com.viaversion.viaversion.api.rewriter.ParticleRewriter {
 
@@ -42,8 +43,21 @@ public class ParticleRewriter<C extends ClientboundPacketType> implements com.vi
         this.mappedParticleType = protocol.mappedTypes() != null ? protocol.mappedTypes().particle() : null;
     }
 
+    /** Subclasses opt in only after their dust behavior is covered by wire-equivalence tests. */
+    public boolean hasCanonicalLegacyDust() {
+        return getClass() == ParticleRewriter.class;
+    }
+
+    private PacketHandler dustHandler(PacketHandler handler) {
+        return dustHandler(true, handler);
+    }
+
+    private PacketHandler dustHandler(boolean canonicalTypes, PacketHandler handler) {
+        return canonicalTypes && hasCanonicalLegacyDust() ? LegacyDustHandler.wrap(handler) : handler;
+    }
+
     public void registerLevelParticles1_13(C packetType, Type<?> coordType) {
-        protocol.registerClientbound(packetType, new PacketHandlers() {
+        protocol.registerClientbound(packetType, dustHandler(coordType == Types.FLOAT || coordType == Types.DOUBLE, new PacketHandlers() {
             @Override
             public void register() {
                 map(Types.INT); // 0 - Particle ID
@@ -58,11 +72,11 @@ public class ParticleRewriter<C extends ClientboundPacketType> implements com.vi
                 map(Types.INT); // 9 - Particle Count
                 handler(levelParticlesHandler1_13(Types.INT));
             }
-        });
+        }));
     }
 
     public void registerLevelParticles1_19(C packetType) {
-        protocol.registerClientbound(packetType, new PacketHandlers() {
+        protocol.registerClientbound(packetType, dustHandler(new PacketHandlers() {
             @Override
             public void register() {
                 map(Types.VAR_INT); // 0 - Particle ID
@@ -77,7 +91,7 @@ public class ParticleRewriter<C extends ClientboundPacketType> implements com.vi
                 map(Types.INT); // 9 - Particle Count
                 handler(levelParticlesHandler1_13(Types.VAR_INT));
             }
-        });
+        }));
     }
 
     public PacketHandler levelParticlesHandler1_13(Type<Integer> idType) {
@@ -105,7 +119,7 @@ public class ParticleRewriter<C extends ClientboundPacketType> implements com.vi
     }
 
     public void registerLevelParticles1_20_5(final C packetType) {
-        protocol.registerClientbound(packetType, wrapper -> {
+        protocol.registerClientbound(packetType, dustHandler(wrapper -> {
             wrapper.passthrough(Types.BOOLEAN); // Override limiter
             wrapper.passthrough(Types.DOUBLE); // X
             wrapper.passthrough(Types.DOUBLE); // Y
@@ -118,11 +132,11 @@ public class ParticleRewriter<C extends ClientboundPacketType> implements com.vi
 
             final Particle particle = wrapper.passthroughAndMap(particleType, mappedParticleType);
             rewriteParticle(wrapper.user(), particle);
-        });
+        }));
     }
 
     public void registerLevelParticles1_21_4(final C packetType) {
-        protocol.registerClientbound(packetType, wrapper -> {
+        protocol.registerClientbound(packetType, dustHandler(wrapper -> {
             wrapper.passthrough(Types.BOOLEAN); // Override limiter
             wrapper.passthrough(Types.BOOLEAN); // Always show
             wrapper.passthrough(Types.DOUBLE); // X
@@ -136,14 +150,14 @@ public class ParticleRewriter<C extends ClientboundPacketType> implements com.vi
 
             final Particle particle = wrapper.passthroughAndMap(particleType, mappedParticleType);
             rewriteParticle(wrapper.user(), particle);
-        });
+        }));
     }
 
     public void registerLevelParticles26_3(final C packetType) {
-        protocol.registerClientbound(packetType, wrapper -> {
+        protocol.registerClientbound(packetType, dustHandler(wrapper -> {
             final Particle particle = wrapper.passthroughAndMap(particleType, mappedParticleType);
             rewriteParticle(wrapper.user(), particle);
-        });
+        }));
     }
 
     public void registerExplode1_20_5(final C packetType) {

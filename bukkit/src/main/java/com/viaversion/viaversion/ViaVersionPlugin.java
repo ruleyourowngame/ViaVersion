@@ -32,6 +32,7 @@ import com.viaversion.viaversion.bukkit.platform.BukkitViaLoader;
 import com.viaversion.viaversion.bukkit.platform.BukkitViaTask;
 import com.viaversion.viaversion.bukkit.platform.BukkitViaTaskTask;
 import com.viaversion.viaversion.bukkit.platform.FoliaViaTask;
+import com.viaversion.viaversion.bukkit.platform.MicroServersSupport;
 import com.viaversion.viaversion.bukkit.platform.PaperViaInjector;
 import com.viaversion.viaversion.connection.ConnectionDetails;
 import com.viaversion.viaversion.dump.PluginInfo;
@@ -95,6 +96,8 @@ public class ViaVersionPlugin extends JavaPlugin implements ViaPlatform<Player> 
             getLogger().info("Registering protocol transformers and injecting...");
             manager.init();
         }
+
+        MicroServersSupport.markListenersSafe(this);
 
         if (Via.getConfig().shouldRegisterUserConnectionOnJoin()) {
             // When event priority ties, registration order is used.

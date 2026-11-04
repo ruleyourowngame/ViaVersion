@@ -1,0 +1,161 @@
+{
+  "benchmark": "LegacyDustAllocationBenchmark",
+  "jdk": "25.0.4.1",
+  "netty": "4.2.9.Final",
+  "flags": [
+    "-Xms256m",
+    "-Xmx512m",
+    "-XX:+UseCompactObjectHeaders",
+    "--sun-misc-unsafe-memory-access=allow"
+  ],
+  "warmupPackets": 150000,
+  "measuredPackets": 300000,
+  "metric": "ThreadMXBean allocated bytes on the transforming thread; first-plan compilation and setup excluded",
+  "results": [
+    {
+      "run": 1,
+      "client": "1.12.2",
+      "fast": false,
+      "bytesPerPacket": 56.0,
+      "nsPerPacket": 66.67
+    },
+    {
+      "run": 1,
+      "client": "1.12.2",
+      "fast": true,
+      "bytesPerPacket": 0.0,
+      "nsPerPacket": 57.34
+    },
+    {
+      "run": 1,
+      "client": "1.13",
+      "fast": false,
+      "bytesPerPacket": 712.0,
+      "nsPerPacket": 305.86
+    },
+    {
+      "run": 1,
+      "client": "1.13",
+      "fast": true,
+      "bytesPerPacket": 0.0,
+      "nsPerPacket": 74.55
+    },
+    {
+      "run": 1,
+      "client": "1.20.5-1.20.6",
+      "fast": false,
+      "bytesPerPacket": 952.0,
+      "nsPerPacket": 2014.16
+    },
+    {
+      "run": 1,
+      "client": "1.20.5-1.20.6",
+      "fast": true,
+      "bytesPerPacket": 0.0,
+      "nsPerPacket": 221.75
+    },
+    {
+      "run": 1,
+      "client": "26.2",
+      "fast": false,
+      "bytesPerPacket": 984.0,
+      "nsPerPacket": 2934.21
+    },
+    {
+      "run": 1,
+      "client": "26.2",
+      "fast": true,
+      "bytesPerPacket": 0.0,
+      "nsPerPacket": 474.55
+    },
+    {
+      "run": 1,
+      "client": "26.3",
+      "fast": false,
+      "bytesPerPacket": 1104.0,
+      "nsPerPacket": 3128.43
+    },
+    {
+      "run": 1,
+      "client": "26.3",
+      "fast": true,
+      "bytesPerPacket": 0.0,
+      "nsPerPacket": 506.28
+    },
+    {
+      "run": 2,
+      "client": "1.12.2",
+      "fast": false,
+      "bytesPerPacket": 56.0,
+      "nsPerPacket": 78.14
+    },
+    {
+      "run": 2,
+      "client": "1.12.2",
+      "fast": true,
+      "bytesPerPacket": 0.0,
+      "nsPerPacket": 53.69
+    },
+    {
+      "run": 2,
+      "client": "1.13",
+      "fast": false,
+      "bytesPerPacket": 712.0,
+      "nsPerPacket": 292.34
+    },
+    {
+      "run": 2,
+      "client": "1.13",
+      "fast": true,
+      "bytesPerPacket": 0.0,
+      "nsPerPacket": 79.15
+    },
+    {
+      "run": 2,
+      "client": "1.20.5-1.20.6",
+      "fast": false,
+      "bytesPerPacket": 952.0,
+      "nsPerPacket": 2090.97
+    },
+    {
+      "run": 2,
+      "client": "1.20.5-1.20.6",
+      "fast": true,
+      "bytesPerPacket": 0.0,
+      "nsPerPacket": 224.32
+    },
+    {
+      "run": 2,
+      "client": "26.2",
+      "fast": false,
+      "bytesPerPacket": 984.0,
+      "nsPerPacket": 2806.52
+    },
+    {
+      "run": 2,
+      "client": "26.2",
+      "fast": true,
+      "bytesPerPacket": 0.0,
+      "nsPerPacket": 486.67
+    },
+    {
+      "run": 2,
+      "client": "26.3",
+      "fast": false,
+      "bytesPerPacket": 1104.0,
+      "nsPerPacket": 3038.13
+    },
+    {
+      "run": 2,
+      "client": "26.3",
+      "fast": true,
+      "bytesPerPacket": 0.0,
+      "nsPerPacket": 532.78
+    }
+  ],
+  "limits": [
+    "Synthetic count-zero legacy dust only; no prediction of whole-server allocation reduction.",
+    "No claim about first-packet allocation, off-thread allocation or non-dust packets.",
+    "Timing is illustrative, not a correctness threshold."
+  ]
+}

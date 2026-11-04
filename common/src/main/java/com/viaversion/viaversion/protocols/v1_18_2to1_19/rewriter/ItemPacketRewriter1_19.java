@@ -22,6 +22,7 @@ import com.viaversion.viaversion.api.data.ParticleMappings;
 import com.viaversion.viaversion.api.protocol.remapper.PacketHandler;
 import com.viaversion.viaversion.api.protocol.remapper.PacketHandlers;
 import com.viaversion.viaversion.api.type.Types;
+import com.viaversion.viaversion.protocol.legacy.LegacyDustHandler;
 import com.viaversion.viaversion.protocols.v1_17_1to1_18.packet.ClientboundPackets1_18;
 import com.viaversion.viaversion.protocols.v1_18_2to1_19.Protocol1_18_2To1_19;
 import com.viaversion.viaversion.protocols.v1_18_2to1_19.packet.ServerboundPackets1_19;
@@ -42,7 +43,7 @@ public final class ItemPacketRewriter1_19 extends ItemRewriter<ClientboundPacket
 
     @Override
     public void registerPackets() {
-        protocol.replaceClientbound(ClientboundPackets1_18.LEVEL_PARTICLES, new PacketHandlers() {
+        protocol.replaceClientbound(ClientboundPackets1_18.LEVEL_PARTICLES, LegacyDustHandler.wrap(new PacketHandlers() {
             @Override
             public void register() {
                 map(Types.INT, Types.VAR_INT); // 0 - Particle ID
@@ -70,7 +71,7 @@ public final class ItemPacketRewriter1_19 extends ItemRewriter<ClientboundPacket
                 });
                 handler(protocol.getParticleRewriter().levelParticlesHandler1_13(Types.VAR_INT));
             }
-        });
+        }));
 
         protocol.replaceClientbound(ClientboundPackets1_18.MERCHANT_OFFERS, new PacketHandlers() {
             @Override
@@ -174,6 +175,10 @@ public final class ItemPacketRewriter1_19 extends ItemRewriter<ClientboundPacket
     private PacketHandler sequenceHandler() {
         return wrapper -> {
             final int sequence = wrapper.read(Types.VAR_INT);
+            if (sequence < 0) {
+                throw new IllegalArgumentException("Expected packet sequence nr >= 0");
+            }
+
             final AckSequenceProvider provider = Via.getManager().getProviders().get(AckSequenceProvider.class);
             provider.handleSequence(wrapper.user(), sequence);
         };

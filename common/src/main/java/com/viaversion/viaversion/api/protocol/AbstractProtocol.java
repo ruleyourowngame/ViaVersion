@@ -435,6 +435,11 @@ public abstract class AbstractProtocol<CU extends ClientboundPacketType, CM exte
         return serverboundMappings.hasMapping(state, unmappedPacketId);
     }
 
+    /** Exposes a mapping identity so a compiled plan can fall back after handler replacement. */
+    public final @Nullable PacketMapping clientboundMapping(final State state, final int id) {
+        return clientboundMappings.mappedPacket(state, id);
+    }
+
     @Override
     public void transform(Direction direction, State state, PacketWrapper packetWrapper) throws InformativeException, CancelException {
         PacketMappings mappings = direction == Direction.CLIENTBOUND ? clientboundMappings : serverboundMappings;

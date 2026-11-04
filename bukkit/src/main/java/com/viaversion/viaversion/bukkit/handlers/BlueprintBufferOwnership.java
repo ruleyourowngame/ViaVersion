@@ -61,9 +61,9 @@ final class BlueprintBufferOwnership {
         if (Integer.valueOf(1).equals(version) && input.refCnt() == 1 && input.readerIndex() == 0 && writable(input)
             && input.unwrap() == null && !(input instanceof CompositeByteBuf)
             && input.maxCapacity() == Integer.MAX_VALUE) {
-            // MessageToMessageEncoder releases its input after encode returns. Own a separate
-            // reference so success, cancellation and failure keep the existing finally contract.
-            return input.retain();
+            // Borrow until encode returns: MessageToMessageEncoder still owns and releases this
+            // reference. Retaining here would hide exclusive ownership from guarded transforms.
+            return input;
         }
         return ByteBufUtil.copy(allocator, input);
     }

@@ -32,6 +32,7 @@ import com.viaversion.viaversion.api.type.types.misc.ParticleType;
 import com.viaversion.viaversion.api.type.types.version.VersionedTypes;
 import com.viaversion.viaversion.api.type.types.version.VersionedTypesHolder;
 import com.viaversion.viaversion.data.entity.EntityTrackerBase;
+import com.viaversion.viaversion.protocol.legacy.LegacyDustHandler;
 import com.viaversion.viaversion.protocols.v1_20_3to1_20_5.packet.ServerboundConfigurationPackets1_20_5;
 import com.viaversion.viaversion.protocols.v1_20_5to1_21.packet.ClientboundConfigurationPackets1_21;
 import com.viaversion.viaversion.protocols.v1_21_2to1_21_4.packet.ServerboundPacket1_21_4;
@@ -76,7 +77,7 @@ public final class Protocol1_21_2To1_21_4 extends AbstractProtocol<ClientboundPa
     protected void registerPackets() {
         super.registerPackets();
 
-        replaceClientbound(ClientboundPackets1_21_2.LEVEL_PARTICLES, wrapper -> {
+        replaceClientbound(ClientboundPackets1_21_2.LEVEL_PARTICLES, LegacyDustHandler.wrap(wrapper -> {
             wrapper.passthrough(Types.BOOLEAN); // Override limiter
             wrapper.write(Types.BOOLEAN, false); // Always show
             wrapper.passthrough(Types.DOUBLE); // X
@@ -90,7 +91,7 @@ public final class Protocol1_21_2To1_21_4 extends AbstractProtocol<ClientboundPa
 
             final Particle particle = wrapper.passthroughAndMap(VersionedTypes.V1_21_2.particle, VersionedTypes.V1_21_4.particle);
             particleRewriter.rewriteParticle(wrapper.user(), particle);
-        });
+        }));
 
         replaceClientbound(ClientboundPackets1_21_2.PLAYER_INFO_UPDATE, wrapper -> {
             // Added "show hat" - true by default, keep it like that

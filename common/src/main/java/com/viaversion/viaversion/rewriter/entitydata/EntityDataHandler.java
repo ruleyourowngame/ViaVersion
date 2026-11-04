@@ -18,7 +18,10 @@
 
 package com.viaversion.viaversion.rewriter.entitydata;
 
+import com.viaversion.viaversion.api.connection.UserConnection;
+import com.viaversion.viaversion.api.minecraft.entities.EntityType;
 import com.viaversion.viaversion.api.minecraft.entitydata.EntityData;
+import org.checkerframework.checker.nullness.qual.Nullable;
 
 @FunctionalInterface
 public interface EntityDataHandler {
@@ -30,4 +33,23 @@ public interface EntityDataHandler {
      * @param data  entity data, convenience parameter for {@link EntityDataHandlerEvent#data()}
      */
     void handle(EntityDataHandlerEvent event, EntityData data);
+
+    /**
+     * Opt-in handler for transformations that do not need an event or extra data.
+     * Custom event handlers continue to receive their own event for each data entry.
+     */
+    @FunctionalInterface
+    interface Direct extends EntityDataHandler {
+        /**
+         * @return true to cancel this entry, false to continue filtering
+         */
+        boolean handleData(UserConnection connection, @Nullable EntityType type, EntityData data);
+
+        @Override
+        default void handle(EntityDataHandlerEvent event, EntityData data) {
+            if (handleData(event.user(), event.entityType(), data)) {
+                event.cancel();
+            }
+        }
+    }
 }

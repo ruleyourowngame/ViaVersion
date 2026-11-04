@@ -21,6 +21,7 @@ import com.google.common.base.Preconditions;
 import com.viaversion.viaversion.api.Via;
 import com.viaversion.viaversion.api.connection.ProtocolInfo;
 import com.viaversion.viaversion.api.connection.UserConnection;
+import com.viaversion.viaversion.api.minecraft.item.Item;
 import com.viaversion.viaversion.api.protocol.Protocol;
 import com.viaversion.viaversion.api.protocol.packet.Direction;
 import com.viaversion.viaversion.api.protocol.packet.PacketType;
@@ -37,16 +38,13 @@ import com.viaversion.viaversion.util.PipelineUtil;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.ChannelFuture;
 import java.io.IOException;
-import java.util.ArrayDeque;
-import java.util.ArrayList;
-import java.util.Deque;
 import java.util.List;
 import java.util.Objects;
+import java.util.UUID;
 import org.checkerframework.checker.nullness.qual.Nullable;
 
 public class PacketWrapperImpl implements PacketWrapper {
-    private final Deque<PacketValue<?>> readableObjects = new ArrayDeque<>();
-    private final List<PacketValue<?>> packetValues = new ArrayList<>();
+    private final FieldBuffer packetValues = new FieldBuffer();
     private final ByteBuf inputBuffer;
     private final UserConnection userConnection;
     private boolean send = true;
@@ -76,13 +74,14 @@ public class PacketWrapperImpl implements PacketWrapper {
     @Override
     public <T> T get(Type<T> type, int index) throws InformativeException {
         int currentIndex = 0;
-        for (PacketValue<?> packetValue : packetValues) {
-            if (packetValue.type() != type) {
+        for (int field = 0; field < packetValues.size(); field++) {
+            Type<?> fieldType = packetValues.type(field);
+            if (fieldType != type) {
                 continue;
             }
             if (currentIndex == index) {
                 //noinspection unchecked
-                return (T) packetValue.value();
+                return (T) packetValues.value(field);
             }
             currentIndex++;
         }
@@ -92,8 +91,9 @@ public class PacketWrapperImpl implements PacketWrapper {
     @Override
     public boolean is(Type type, int index) {
         int currentIndex = 0;
-        for (PacketValue<?> packetValue : packetValues) {
-            if (packetValue.type() != type) {
+        for (int field = 0; field < packetValues.size(); field++) {
+            Type<?> fieldType = packetValues.type(field);
+            if (fieldType != type) {
                 continue;
             }
             if (currentIndex == index) {
@@ -107,8 +107,8 @@ public class PacketWrapperImpl implements PacketWrapper {
     @Override
     public boolean isReadable(Type type, int index) {
         int currentIndex = 0;
-        for (PacketValue<?> packetValue : readableObjects) {
-            if (packetValue.type().getBaseClass() != type.getBaseClass()) {
+        for (int i = 0; i < packetValues.readableSize(); i++) {
+            if (packetValues.readableType(i).getBaseClass() != type.getBaseClass()) {
                 continue;
             }
             if (currentIndex == index) {
@@ -123,12 +123,13 @@ public class PacketWrapperImpl implements PacketWrapper {
     @Override
     public <T> void set(Type<T> type, int index, @Nullable T value) throws InformativeException {
         int currentIndex = 0;
-        for (PacketValue packetValue : packetValues) {
-            if (packetValue.type() != type) {
+        for (int field = 0; field < packetValues.size(); field++) {
+            Type<?> fieldType = packetValues.type(field);
+            if (fieldType != type) {
                 continue;
             }
             if (currentIndex == index) {
-                packetValue.setValue(value);
+                packetValues.setValue(field, value);
                 return;
             }
             currentIndex++;
@@ -138,7 +139,7 @@ public class PacketWrapperImpl implements PacketWrapper {
 
     @Override
     public <T> T read(Type<T> type) {
-        return readableObjects.isEmpty() ? readFromBuffer(type) : pollReadableObject(type).value;
+        return packetValues.readableSize() == 0 ? readFromBuffer(type) : pollReadableObject(type);
     }
 
     private <T> T readFromBuffer(Type<T> type) {
@@ -150,22 +151,24 @@ public class PacketWrapperImpl implements PacketWrapper {
         }
     }
 
-    private <T> PacketValue<T> pollReadableObject(Type<T> type) {
-        PacketValue<?> readValue = readableObjects.poll();
-        Type<?> readType = readValue.type();
+    private <T> T pollReadableObject(Type<T> type) {
+        Type<?> readType = packetValues.readableType(0);
+        Object value = packetValues.readableValue();
+        packetValues.discardReadable();
         if (readType == type
             || (type.getBaseClass() == readType.getBaseClass()
             && type.getOutputClass() == readType.getOutputClass())) {
             //noinspection unchecked
-            return (PacketValue<T>) readValue;
-        } else {
-            throw createInformativeException(new IOException("Unable to read type " + type.getTypeName() + ", found " + readValue.type().getTypeName()), type, readableObjects.size());
+            return (T) value;
         }
+        throw createInformativeException(new IOException("Unable to read type " + type.getTypeName() + ", found " + readType.getTypeName()), type, packetValues.readableSize());
     }
 
     @Override
     public <T> void write(Type<T> type, T value) {
-        addPacketValue(new PacketValue<>(type, value));
+        if (!allActionsRead) {
+            packetValues.add(type, value);
+        }
     }
 
     /**
@@ -191,21 +194,12 @@ public class PacketWrapperImpl implements PacketWrapper {
 
     @Override
     public <T> T passthrough(Type<T> type) throws InformativeException {
-        if (readableObjects.isEmpty()) {
-            T value = readFromBuffer(type);
-            addPacketValue(new PacketValue<>(type, value));
-            return value;
-        } else {
-            PacketValue<T> value = pollReadableObject(type);
-            addPacketValue(value);
-            return value.value;
-        }
-    }
-
-    private void addPacketValue(final PacketValue<?> packetValue) {
+        Type<?> storedType = packetValues.readableSize() == 0 ? type : packetValues.readableType(0);
+        T value = read(type);
         if (!allActionsRead) {
-            packetValues.add(packetValue);
+            packetValues.add(storedType, value);
         }
+        return value;
     }
 
     @Override
@@ -223,8 +217,7 @@ public class PacketWrapperImpl implements PacketWrapper {
     @Override
     public void passthroughAll() throws InformativeException {
         // Copy previous objects
-        packetValues.addAll(readableObjects);
-        readableObjects.clear();
+        appendUnreadValues();
         // If the buffer has readable bytes, copy them.
         if (inputBuffer.isReadable()) {
             passthrough(Types.REMAINING_BYTES);
@@ -241,26 +234,30 @@ public class PacketWrapperImpl implements PacketWrapper {
 
     public boolean areStoredPacketValuesEmpty() {
         // Check for read/added packet values, not the input buffer
-        return packetValues.isEmpty() && readableObjects.isEmpty();
+        return packetValues.isEmpty() && packetValues.readableSize() == 0;
     }
 
     public void writeProcessedValues(ByteBuf buffer) throws InformativeException {
         if (id != -1) {
             Types.VAR_INT.writePrimitive(buffer, id);
         }
-        if (!readableObjects.isEmpty()) {
-            packetValues.addAll(readableObjects);
-            readableObjects.clear();
+        if (packetValues.readableSize() != 0) {
+            appendUnreadValues();
         }
 
         for (int i = 0; i < packetValues.size(); i++) {
-            PacketValue<?> packetValue = packetValues.get(i);
+            Type<?> fieldType = packetValues.type(i);
             try {
-                packetValue.write(buffer);
+                writeField(fieldType, buffer, packetValues.value(i));
             } catch (final Exception e) {
-                throw createInformativeException(e, packetValue.type(), i);
+                throw createInformativeException(e, fieldType, i);
             }
         }
+    }
+
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    private static void writeField(Type type, ByteBuf buffer, Object value) throws Exception {
+        type.write(buffer, value);
     }
 
     private InformativeException createInformativeException(final Exception cause, final Type<?> type, final int index) {
@@ -271,7 +268,7 @@ public class PacketWrapperImpl implements PacketWrapper {
             .set("Server Protocol", protocolInfo.serverProtocolVersion().getName())
             .set("Index", index)
             .set("Type", type.getTypeName())
-            .set("Data", this.packetValues)
+            .set("Data", new PacketValuesSummary(this.packetValues))
             .set("Packet ID", this.id);
     }
 
@@ -280,7 +277,7 @@ public class PacketWrapperImpl implements PacketWrapper {
         if (inputBuffer != null) {
             inputBuffer.clear();
         }
-        readableObjects.clear(); // :(
+        packetValues.clearReadable();
     }
 
     @Override
@@ -308,7 +305,13 @@ public class PacketWrapperImpl implements PacketWrapper {
         if (currentThread) {
             sendNow(protocol, skipCurrentPipeline);
         } else {
-            connection.getChannel().eventLoop().execute(() -> sendNow(protocol, skipCurrentPipeline));
+            connection.getChannel().eventLoop().execute(() -> {
+                // By the time a scheduled send runs the channel may have closed, and the connection's
+                // stored objects are cleared on close, so the pipeline would mangle the packet
+                if (connection.getChannel().isActive()) {
+                    sendNow(protocol, skipCurrentPipeline);
+                }
+            });
         }
     }
 
@@ -474,11 +477,11 @@ public class PacketWrapperImpl implements PacketWrapper {
 
     @Override
     public void resetReader() {
-        // Move all packet values to the readable for next Protocol
-        for (int i = packetValues.size() - 1; i >= 0; i--) {
-            this.readableObjects.addFirst(this.packetValues.get(i));
-        }
-        this.packetValues.clear();
+        packetValues.resetReader();
+    }
+
+    private void appendUnreadValues() {
+        packetValues.appendUnread();
     }
 
     @Override
@@ -486,12 +489,8 @@ public class PacketWrapperImpl implements PacketWrapper {
         if (allActionsRead) {
             return;
         }
-
-        final int size = packetValues.size();
-        Preconditions.checkArgument(values <= size, "Tried resetting more values than there are readable values");
-        for (int i = size - 1; i >= size - values; i--) {
-            this.readableObjects.addFirst(this.packetValues.remove(i));
-        }
+        Preconditions.checkArgument(values >= 0 && values <= packetValues.size(), "Tried resetting more values than there are readable values");
+        packetValues.rewind(values);
     }
 
     @Override
@@ -617,8 +616,172 @@ public class PacketWrapperImpl implements PacketWrapper {
             "type=" + packetType +
             ", id=" + id +
             ", values=" + packetValues +
-            ", readable=" + readableObjects +
+            ", readable=" + packetValues.describeReadable() +
             '}';
+    }
+
+    private static final class PacketValuesSummary {
+        private final FieldBuffer values;
+        private String s;
+
+        private PacketValuesSummary(final FieldBuffer values) {
+            this.values = values;
+        }
+
+        @Override
+        public String toString() {
+            if (this.s == null) {
+                this.s = Via.getManager().isDebug() ? this.values.toString() : summarize();
+            }
+            return this.s;
+        }
+
+        private String summarize() {
+            final int maxLength = Math.max(0, Via.getConfig().maxErrorLength());
+            final StringBuilder builder = new StringBuilder("[");
+            for (int field = 0; field < values.size(); field++) {
+                if (builder.length() > 1) {
+                    builder.append(", ");
+                }
+                builder.append('{').append(values.type(field)).append(": ").append(stringToLog(values.value(field))).append('}');
+                if (builder.length() >= maxLength) {
+                    builder.setLength(maxLength);
+                    return builder.append("...").toString();
+                }
+            }
+            return builder.append(']').toString();
+        }
+
+        private static String stringToLog(@Nullable final Object value) {
+            if (value == null || value instanceof Number || value instanceof Boolean || value instanceof Character
+                || value instanceof CharSequence || value instanceof UUID || value instanceof Enum<?>) {
+                return String.valueOf(value);
+            } else if (value instanceof Item item) {
+                return "Item{id=" + item.identifier() + ", amount=" + item.amount() + "}";
+            }
+            return "<" + value.getClass().getSimpleName() + ">";
+        }
+    }
+
+    /** Unread fields followed by written fields in one ring; consumed slots are immediately reusable. */
+    private static final class FieldBuffer {
+        private static final Object[] EMPTY = new Object[0];
+        private Object[] fields = EMPTY;
+        private int head;
+        private int readable;
+        private int count;
+
+        int size() { return count - readable; }
+        boolean isEmpty() { return size() == 0; }
+        int readableSize() { return readable; }
+        Type<?> type(int index) { return (Type<?>) fields[slot(readable + index)]; }
+        Object value(int index) { return fields[slot(readable + index) + 1]; }
+        void setValue(int index, Object value) { fields[slot(readable + index) + 1] = value; }
+        Type<?> readableType(int index) { return (Type<?>) fields[slot(index)]; }
+        Object readableValue() { return fields[slot(0) + 1]; }
+
+        private int slot(int index) {
+            return ((head + index) & ((fields.length >> 1) - 1)) << 1;
+        }
+
+        void add(Type<?> type, Object value) {
+            if (count == fields.length >> 1) {
+                Object[] grown = new Object[Math.max(8, Math.multiplyExact(fields.length, 2))];
+                for (int i = 0; i < count; i++) {
+                    int source = slot(i);
+                    grown[i * 2] = fields[source];
+                    grown[i * 2 + 1] = fields[source + 1];
+                }
+                fields = grown;
+                head = 0;
+            }
+            int target = slot(count++);
+            fields[target] = type;
+            fields[target + 1] = value;
+        }
+
+        void discardReadable() {
+            int source = slot(0);
+            fields[source] = null;
+            fields[source + 1] = null;
+            head = (head + 1) & ((fields.length >> 1) - 1);
+            readable--;
+            count--;
+        }
+
+        void clearReadable() {
+            while (readable != 0) {
+                discardReadable();
+            }
+        }
+
+        void clear() {
+            for (int i = 0; i < count; i++) {
+                int source = slot(i);
+                fields[source] = null;
+                fields[source + 1] = null;
+            }
+            head = readable = count = 0;
+        }
+
+        void resetReader() {
+            if (isEmpty()) {
+                return;
+            }
+            appendUnread();
+            readable = count;
+        }
+
+        void appendUnread() {
+            // A partially consumed stage writes its output before its unread tail.
+            if (readable != 0 && readable != count) {
+                int capacity = fields.length >> 1;
+                if (count != capacity) {
+                    // Copy forwards: a small gap makes the destination overlap the old prefix.
+                    for (int i = 0; i < readable; i++) {
+                        int source = slot(i), target = slot(count + i);
+                        fields[target] = fields[source];
+                        fields[target + 1] = fields[source + 1];
+                        fields[source] = null;
+                        fields[source + 1] = null;
+                    }
+                }
+                head = (head + readable) & (capacity - 1);
+            }
+            readable = 0;
+        }
+
+        void rewind(int values) {
+            if (values != 0) {
+                int capacity = fields.length >> 1;
+                // Move only the suffix into the gap before the unread head. Copy backwards
+                // because the source and destination overlap when the gap is small.
+                // A full ring already has its suffix immediately before the head.
+                if (count != capacity) {
+                    for (int i = values - 1; i >= 0; i--) {
+                        int source = slot(count - values + i), target = slot(capacity - values + i);
+                        fields[target] = fields[source];
+                        fields[target + 1] = fields[source + 1];
+                        fields[source] = null;
+                        fields[source + 1] = null;
+                    }
+                }
+                head = (head - values) & (capacity - 1);
+                readable += values;
+            }
+        }
+
+        String describeReadable() { return describe(0, readable); }
+        private String describe(int from, int to) {
+            StringBuilder out = new StringBuilder("[");
+            for (int i = from; i < to; i++) {
+                if (i != from) out.append(", ");
+                int source = slot(i);
+                out.append('{').append(fields[source]).append(": ").append(ArrayUtil.toString(fields[source + 1])).append('}');
+            }
+            return out.append(']').toString();
+        }
+        @Override public String toString() { return describe(readable, count); }
     }
 
     public static final class PacketValue<T> {

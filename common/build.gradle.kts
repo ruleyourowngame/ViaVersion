@@ -1,4 +1,10 @@
+plugins {
+    `java-test-fixtures`
+}
+
 dependencies {
+    testFixturesImplementation(rootProject.libs.guava)
+    testFixturesImplementation(rootProject.libs.netty)
     api(projects.viaversionApi)
     api(rootProject.libs.text) {
         exclude("com.google.code.gson", "gson")

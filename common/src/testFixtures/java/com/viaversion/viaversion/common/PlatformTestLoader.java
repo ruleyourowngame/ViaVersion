@@ -25,12 +25,12 @@ import com.viaversion.viaversion.common.dummy.TestPlatform;
 import com.viaversion.viaversion.platform.NoopInjector;
 import java.util.concurrent.CompletionException;
 
-final class PlatformTestLoader {
+public final class PlatformTestLoader {
 
     private static boolean loaded;
     private static Throwable failure;
 
-    static synchronized void ensureLoaded() throws InterruptedException {
+    public static synchronized void ensureLoaded() throws InterruptedException {
         if (loaded) {
             return;
         }

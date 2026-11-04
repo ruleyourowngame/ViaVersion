@@ -25,11 +25,12 @@ import com.viaversion.viaversion.api.protocol.version.ProtocolVersion;
 import com.viaversion.viaversion.bukkit.listeners.ViaBukkitListener;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
-import java.util.HashSet;
+import java.util.Collections;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.WeakHashMap;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.logging.Level;
 import org.bukkit.entity.EntityType;
 import org.bukkit.entity.Player;
@@ -73,18 +74,21 @@ public class PlayerSneakListener extends ViaBukkitListener {
 
         // From 1.9 upwards the server hitbox is set in every entity tick, so we have to reset it everytime
         if (Via.getAPI().getServerVersion().lowestSupportedProtocolVersion().newerThan(ProtocolVersion.v1_8)) {
-            sneaking = new WeakHashMap<>();
+            // Sneak events can fire on several threads at once (Blueprint MicroServers game threads)
+            sneaking = Collections.synchronizedMap(new WeakHashMap<>());
             useCache = true;
             plugin.getServer().getScheduler().runTaskTimer(plugin, () -> {
-                for (Map.Entry<Player, Boolean> entry : sneaking.entrySet()) {
-                    setHeight(entry.getKey(), entry.getValue() ? HEIGHT_1_14 : HEIGHT_1_9);
+                synchronized (sneaking) {
+                    for (Map.Entry<Player, Boolean> entry : sneaking.entrySet()) {
+                        setHeight(entry.getKey(), entry.getValue() ? HEIGHT_1_14 : HEIGHT_1_9);
+                    }
                 }
             }, 1, 1);
         }
 
         // Suffocation removal only required for 1.14+ clients.
         if (is1_14Fix) {
-            sneakingUuids = new HashSet<>();
+            sneakingUuids = ConcurrentHashMap.newKeySet();
         }
     }
 
