@@ -39,6 +39,11 @@ public final class ParticleRewriter1_21_2 extends ParticleRewriter<ClientboundPa
     }
 
     @Override
+    public boolean hasCanonicalLegacyDust() {
+        return true;
+    }
+
+    @Override
     public void rewriteParticle(final UserConnection connection, final Particle particle) {
         super.rewriteParticle(connection, particle);
 

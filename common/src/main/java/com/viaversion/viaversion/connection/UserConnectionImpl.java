@@ -34,6 +34,7 @@ import com.viaversion.viaversion.api.type.Types;
 import com.viaversion.viaversion.api.type.types.VarIntType;
 import com.viaversion.viaversion.exception.CancelException;
 import com.viaversion.viaversion.exception.InformativeException;
+import com.viaversion.viaversion.protocol.legacy.LegacyDustFastPath;
 import com.viaversion.viaversion.protocol.packet.PacketWrapperImpl;
 import com.viaversion.viaversion.util.ChatColorUtil;
 import com.viaversion.viaversion.util.NestingLimiter;
@@ -70,6 +71,8 @@ public class UserConnectionImpl implements UserConnection {
     private final ProtocolInfo protocolInfo = new ProtocolInfoImpl();
     private final Channel channel;
     private final boolean clientSide;
+    private final boolean legacyDustFastPathEnabled;
+    private LegacyDustFastPath legacyDustFastPath;
     private boolean active = true;
     private boolean pendingDisconnect;
 
@@ -80,8 +83,13 @@ public class UserConnectionImpl implements UserConnection {
      * @param clientSide true if it's a client-side connection
      */
     public UserConnectionImpl(@Nullable Channel channel, boolean clientSide) {
+        this(channel, clientSide, Boolean.getBoolean("viaversion.legacyDustFastPath"));
+    }
+
+    protected UserConnectionImpl(@Nullable Channel channel, boolean clientSide, boolean legacyDustFastPathEnabled) {
         this.channel = channel;
         this.clientSide = clientSide;
+        this.legacyDustFastPathEnabled = legacyDustFastPathEnabled;
     }
 
     /**
@@ -89,6 +97,10 @@ public class UserConnectionImpl implements UserConnection {
      */
     public UserConnectionImpl(@Nullable Channel channel) {
         this(channel, false);
+    }
+
+    public long legacyDustFastPathPackets() {
+        return legacyDustFastPath != null ? legacyDustFastPath.transformedPackets() : 0;
     }
 
     @Override
@@ -406,6 +418,11 @@ public class UserConnectionImpl implements UserConnection {
 
             // Move reader back and treat it like a regular packet
             buf.readerIndex(buf.readerIndex() - Long.BYTES);
+        }
+
+        if (legacyDustFastPathEnabled && direction == Direction.CLIENTBOUND && id == 42) {
+            if (legacyDustFastPath == null) legacyDustFastPath = new LegacyDustFastPath();
+            if (legacyDustFastPath.tryTransform(this, id, buf)) return;
         }
 
         final int valuesReaderIndex = buf.readerIndex();

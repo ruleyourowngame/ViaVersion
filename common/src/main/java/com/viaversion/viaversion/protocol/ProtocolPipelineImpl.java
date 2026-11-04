@@ -196,6 +196,15 @@ public class ProtocolPipelineImpl implements ProtocolPipeline {
         return index;
     }
 
+    /** Checks a compiled snapshot without allocating a list wrapper or iterator. */
+    public boolean matchesClientboundPath(final Protocol[] expected) {
+        if (expected.length != reversedProtocolList.size()) return false;
+        for (int i = 0; i < expected.length; i++) {
+            if (expected[i] != reversedProtocolList.get(i)) return false;
+        }
+        return true;
+    }
+
     @Override
     public List<Protocol> pipes() {
         return Collections.unmodifiableList(protocolList);

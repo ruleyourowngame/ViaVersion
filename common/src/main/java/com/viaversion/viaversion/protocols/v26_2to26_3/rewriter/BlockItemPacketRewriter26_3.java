@@ -40,6 +40,7 @@ import com.viaversion.viaversion.api.protocol.packet.PacketWrapper;
 import com.viaversion.viaversion.api.protocol.version.ProtocolVersion;
 import com.viaversion.viaversion.api.type.Types;
 import com.viaversion.viaversion.api.type.types.version.VersionedTypes;
+import com.viaversion.viaversion.protocol.legacy.LegacyDustHandler;
 import com.viaversion.viaversion.protocols.v1_21_11to26_1.packet.ClientboundPacket26_1;
 import com.viaversion.viaversion.protocols.v1_21_11to26_1.packet.ClientboundPackets26_1;
 import com.viaversion.viaversion.protocols.v26_2to26_3.Protocol26_2To26_3;
@@ -70,7 +71,7 @@ public final class BlockItemPacketRewriter26_3 extends StructuredItemRewriter<Cl
 
     @Override
     protected void registerPackets() {
-        protocol.replaceClientbound(ClientboundPackets26_1.LEVEL_PARTICLES, wrapper -> {
+        protocol.replaceClientbound(ClientboundPackets26_1.LEVEL_PARTICLES, LegacyDustHandler.wrap(wrapper -> {
             wrapper.write(protocol.getParticleRewriter().mappedParticleType(), new Particle(0)); // Replace later
 
             wrapper.passthrough(Types.BOOLEAN); // Override limiter
@@ -93,7 +94,7 @@ public final class BlockItemPacketRewriter26_3 extends StructuredItemRewriter<Cl
             final Particle particle = wrapper.read(protocol.getParticleRewriter().particleType());
             protocol.getParticleRewriter().rewriteParticle(wrapper.user(), particle);
             wrapper.set(protocol.getParticleRewriter().mappedParticleType(), 0, particle);
-        });
+        }));
 
 
         protocol.appendClientbound(ClientboundPackets26_1.EXPLODE, wrapper -> {

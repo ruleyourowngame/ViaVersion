@@ -34,6 +34,7 @@ import com.viaversion.viaversion.api.protocol.remapper.PacketHandlers;
 import com.viaversion.viaversion.api.type.Types;
 import com.viaversion.viaversion.api.type.types.chunk.ChunkType1_13;
 import com.viaversion.viaversion.api.type.types.chunk.ChunkType1_9_3;
+import com.viaversion.viaversion.protocol.legacy.LegacyDustHandler;
 import com.viaversion.viaversion.protocols.v1_12_2to1_13.Protocol1_12_2To1_13;
 import com.viaversion.viaversion.protocols.v1_12_2to1_13.blockconnections.ConnectionData;
 import com.viaversion.viaversion.protocols.v1_12_2to1_13.blockconnections.ConnectionHandler;
@@ -473,7 +474,7 @@ public class WorldPacketRewriter1_13 {
             }
         });
 
-        protocol.registerClientbound(ClientboundPackets1_12_1.LEVEL_PARTICLES, new PacketHandlers() {
+        protocol.registerClientbound(ClientboundPackets1_12_1.LEVEL_PARTICLES, LegacyDustHandler.wrap(new PacketHandlers() {
             @Override
             public void register() {
                 map(Types.INT); // 0 - Particle ID
@@ -562,7 +563,7 @@ public class WorldPacketRewriter1_13 {
 
                 });
             }
-        });
+        }));
 
         // Incoming Packets
         protocol.registerServerbound(ServerboundPackets1_13.USE_ITEM_ON, wrapper -> {
@@ -591,7 +592,7 @@ public class WorldPacketRewriter1_13 {
 
     }
 
-    private static float redstoneDustColor(float speed, float offset, boolean red) {
+    public static float redstoneDustColor(float speed, float offset, boolean red) {
         // Vanilla 1.12 substitutes red when the raw red value is zero
         float color = speed * offset;
         if (red && color == 0F) {

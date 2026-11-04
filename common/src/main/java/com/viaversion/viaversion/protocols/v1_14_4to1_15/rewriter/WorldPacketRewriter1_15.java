@@ -21,6 +21,7 @@ import com.viaversion.viaversion.api.protocol.remapper.PacketHandlers;
 import com.viaversion.viaversion.api.type.Types;
 import com.viaversion.viaversion.api.type.types.chunk.ChunkType1_14;
 import com.viaversion.viaversion.api.type.types.chunk.ChunkType1_15;
+import com.viaversion.viaversion.protocol.legacy.LegacyDustHandler;
 import com.viaversion.viaversion.protocols.v1_14_3to1_14_4.packet.ClientboundPackets1_14_4;
 import com.viaversion.viaversion.protocols.v1_14_4to1_15.Protocol1_14_4To1_15;
 
@@ -51,7 +52,7 @@ public final class WorldPacketRewriter1_15 {
             }
         });
 
-        protocol.replaceClientbound(ClientboundPackets1_14_4.LEVEL_PARTICLES, new PacketHandlers() {
+        protocol.replaceClientbound(ClientboundPackets1_14_4.LEVEL_PARTICLES, LegacyDustHandler.wrap(new PacketHandlers() {
             @Override
             public void register() {
                 map(Types.INT); // 0 - Particle ID
@@ -74,6 +75,6 @@ public final class WorldPacketRewriter1_15 {
                     }
                 });
             }
-        });
+        }));
     }
 }

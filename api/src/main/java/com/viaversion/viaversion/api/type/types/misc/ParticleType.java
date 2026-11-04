@@ -31,11 +31,17 @@ import com.viaversion.viaversion.api.type.Type;
 import com.viaversion.viaversion.api.type.Types;
 import com.viaversion.viaversion.util.Key;
 import io.netty.buffer.ByteBuf;
+import org.checkerframework.checker.nullness.qual.Nullable;
 
 public class ParticleType extends DynamicType<Particle> {
 
     public ParticleType() {
         super(Particle.class);
+    }
+
+    /** Allows a compiled wire plan to detect replacement of a particle data reader. */
+    public @Nullable DataReader<Particle> reader(final int id) {
+        return readers.get(id);
     }
 
     @Override

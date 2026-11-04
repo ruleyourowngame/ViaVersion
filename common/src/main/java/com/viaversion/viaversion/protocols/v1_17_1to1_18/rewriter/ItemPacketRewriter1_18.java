@@ -20,6 +20,7 @@ package com.viaversion.viaversion.protocols.v1_17_1to1_18.rewriter;
 import com.viaversion.viaversion.api.data.ParticleMappings;
 import com.viaversion.viaversion.api.protocol.remapper.PacketHandlers;
 import com.viaversion.viaversion.api.type.Types;
+import com.viaversion.viaversion.protocol.legacy.LegacyDustHandler;
 import com.viaversion.viaversion.protocols.v1_16_4to1_17.packet.ServerboundPackets1_17;
 import com.viaversion.viaversion.protocols.v1_17_1to1_18.Protocol1_17_1To1_18;
 import com.viaversion.viaversion.protocols.v1_17to1_17_1.packet.ClientboundPackets1_17_1;
@@ -34,7 +35,7 @@ public final class ItemPacketRewriter1_18 extends ItemRewriter<ClientboundPacket
 
     @Override
     public void registerPackets() {
-        protocol.replaceClientbound(ClientboundPackets1_17_1.LEVEL_PARTICLES, new PacketHandlers() {
+        protocol.replaceClientbound(ClientboundPackets1_17_1.LEVEL_PARTICLES, LegacyDustHandler.wrap(new PacketHandlers() {
             @Override
             public void register() {
                 map(Types.INT); // Particle id
@@ -72,7 +73,7 @@ public final class ItemPacketRewriter1_18 extends ItemRewriter<ClientboundPacket
                     }
                 });
             }
-        });
+        }));
 
         new RecipeRewriter<>(protocol).register(ClientboundPackets1_17_1.UPDATE_RECIPES);
     }
