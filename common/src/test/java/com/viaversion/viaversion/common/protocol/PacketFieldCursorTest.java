@@ -18,14 +18,112 @@
 package com.viaversion.viaversion.common.protocol;
 
 import com.viaversion.viaversion.api.type.Types;
+import com.viaversion.viaversion.api.type.types.IntType;
 import com.viaversion.viaversion.protocol.packet.PacketWrapperImpl;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import org.junit.jupiter.api.Test;
+import java.util.ArrayList;
+import java.util.ArrayDeque;
+import java.util.Random;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 final class PacketFieldCursorTest {
+    @Test
+    void compatiblePassthroughKeepsOriginalStoredType() {
+        PacketWrapperImpl packet = new PacketWrapperImpl(-1, null, null);
+        IntType compatible = new IntType();
+        packet.write(Types.INT, 7);
+        packet.resetReader();
+        assertEquals(7, packet.passthrough(compatible));
+        assertTrue(packet.is(Types.INT, 0));
+        assertFalse(packet.is(compatible, 0));
+        assertEquals(7, packet.get(Types.INT, 0));
+    }
+
+    @Test
+    void packedFieldsMatchDequeModelAcrossRandomOperations() {
+        Random random = new Random(913791);
+        for (int trial = 0; trial < 250; trial++) {
+            PacketWrapperImpl packet = new PacketWrapperImpl(-1, null, null);
+            ArrayList<Integer> written = new ArrayList<>();
+            ArrayDeque<Integer> readable = new ArrayDeque<>();
+            for (int step = 0; step < 250; step++) {
+                switch (random.nextInt(7)) {
+                    case 0 -> {
+                        int value = random.nextInt();
+                        packet.write(Types.INT, value); written.add(value);
+                    }
+                    case 1 -> {
+                        packet.resetReader();
+                        for (int i = written.size() - 1; i >= 0; i--) readable.addFirst(written.get(i));
+                        written.clear();
+                    }
+                    case 2 -> {
+                        if (!readable.isEmpty()) assertEquals(readable.removeFirst(), packet.read(Types.INT));
+                    }
+                    case 3 -> {
+                        if (!readable.isEmpty()) {
+                            int value = readable.removeFirst();
+                            assertEquals(value, packet.passthrough(Types.INT)); written.add(value);
+                        }
+                    }
+                    case 4 -> {
+                        int count = random.nextInt(written.size() + 1);
+                        packet.rewindReader(count);
+                        for (int i = 0; i < count; i++) readable.addFirst(written.remove(written.size() - 1));
+                    }
+                    case 5 -> {
+                        if (!written.isEmpty()) {
+                            int index = random.nextInt(written.size()), value = random.nextInt();
+                            assertEquals(written.get(index), packet.get(Types.INT, index));
+                            packet.set(Types.INT, index, value); written.set(index, value);
+                        }
+                    }
+                    case 6 -> {
+                        if (random.nextInt(10) == 0) { packet.clearPacket(); written.clear(); readable.clear(); }
+                    }
+                }
+                assertEquals(written.isEmpty() && readable.isEmpty(), packet.areStoredPacketValuesEmpty());
+            }
+            ByteBuf output = Unpooled.buffer();
+            try {
+                packet.writeProcessedValues(output);
+                for (int value : written) assertEquals(value, output.readInt());
+                for (int value : readable) assertEquals(value, output.readInt());
+                assertFalse(output.isReadable());
+            } finally { output.release(); }
+        }
+    }
+
+    @Test
+    void mixedNullableFieldsAndReadOnlyActionsKeepTypesAndValues() {
+        PacketWrapperImpl packet = new PacketWrapperImpl(-1, null, null);
+        packet.write(Types.STRING, "first");
+        packet.write(Types.OPTIONAL_STRING, null);
+        packet.write(Types.INT, 42);
+        assertNull(packet.get(Types.OPTIONAL_STRING, 0));
+        packet.set(Types.STRING, 0, "changed");
+        packet.resetReader();
+        packet.consumeReadsOnly(() -> {
+            assertEquals("changed", packet.passthrough(Types.STRING));
+            packet.write(Types.INT, 999);
+            packet.rewindReader(100);
+        });
+        assertFalse(packet.is(Types.STRING, 0));
+        assertFalse(packet.is(Types.INT, 0));
+        assertNull(packet.passthrough(Types.OPTIONAL_STRING));
+        packet.passthrough(Types.INT);
+        ByteBuf output = Unpooled.buffer();
+        try {
+            packet.writeProcessedValues(output);
+            assertFalse(output.readBoolean());
+            assertEquals(42, output.readInt());
+            assertFalse(output.isReadable());
+        } finally { output.release(); }
+    }
+
     @Test
     void repeatedTransformsPreserveUnreadTail() {
         PacketWrapperImpl packet = new PacketWrapperImpl(-1, null, null);
