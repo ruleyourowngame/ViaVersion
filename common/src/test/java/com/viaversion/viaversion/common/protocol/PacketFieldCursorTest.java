@@ -31,6 +31,138 @@ import static org.junit.jupiter.api.Assertions.*;
 
 final class PacketFieldCursorTest {
     @Test
+    void rewindsPreserveOrderWithFullOverlappingAndWrappedStorage() {
+        for (int fields = 1; fields <= 64; fields++) {
+            for (int consumed = 0; consumed <= fields; consumed++) {
+                for (int rewind = 0; rewind <= fields; rewind++) {
+                    PacketWrapperImpl packet = new PacketWrapperImpl(-1, null, null);
+                    for (int i = 0; i < fields; i++) packet.write(Types.INT, -i - 1);
+                    packet.resetReader();
+                    for (int i = 0; i < consumed; i++) packet.read(Types.INT);
+                    for (int i = 0; i < fields; i++) packet.write(Types.INT, i);
+                    packet.rewindReader(rewind);
+                    for (int i = fields - rewind; i < fields; i++) assertEquals(i, packet.read(Types.INT));
+                    for (int i = consumed; i < fields; i++) assertEquals(-i - 1, packet.read(Types.INT));
+                    for (int i = 0; i < fields - rewind; i++) assertEquals(i, packet.get(Types.INT, i));
+                    packet.resetReader();
+                    for (int i = 0; i < fields - rewind; i++) assertEquals(i, packet.read(Types.INT));
+                    assertTrue(packet.areStoredPacketValuesEmpty());
+                }
+            }
+        }
+    }
+
+    @Test
+    void commandLikeSingleFieldRewindsLeaveWrittenPrefixInPlace() throws Exception {
+        PacketWrapperImpl packet = new PacketWrapperImpl(-1, null, null);
+        java.lang.reflect.Field storageField = PacketWrapperImpl.class.getDeclaredField("packetValues");
+        storageField.setAccessible(true);
+        Object storage = storageField.get(packet);
+        java.lang.reflect.Field fieldsField = storage.getClass().getDeclaredField("fields");
+        fieldsField.setAccessible(true);
+        java.lang.reflect.Field headField = storage.getClass().getDeclaredField("head");
+        headField.setAccessible(true);
+        for (int i = 0; i < 4096; i++) {
+            packet.write(Types.INT, i);
+            Object[] fields = (Object[]) fieldsField.get(storage);
+            int head = headField.getInt(storage);
+            int first = (head & ((fields.length >> 1) - 1)) << 1;
+            Object firstType = fields[first], firstValue = fields[first + 1];
+            packet.rewindReader(1);
+            if (i != 0) {
+                assertSame(firstType, fields[first], "rewind must not move the untouched prefix");
+                assertSame(firstValue, fields[first + 1]);
+            }
+            assertSame(fields, fieldsField.get(storage), "rewind must not allocate another field array");
+            assertEquals(i, packet.read(Types.INT));
+            packet.write(Types.INT, i);
+        }
+        for (int i = 0; i < 4096; i++) assertEquals(i, packet.get(Types.INT, i));
+    }
+
+    @Test
+    void partialResetLeavesWrittenPrefixInPlace() throws Exception {
+        PacketWrapperImpl packet = new PacketWrapperImpl(-1, null, null);
+        packet.write(Types.INT, -1);
+        packet.resetReader();
+        for (int i = 0; i < 4096; i++) packet.write(Types.INT, i);
+        java.lang.reflect.Field storageField = PacketWrapperImpl.class.getDeclaredField("packetValues");
+        storageField.setAccessible(true);
+        Object storage = storageField.get(packet);
+        java.lang.reflect.Field fieldsField = storage.getClass().getDeclaredField("fields");
+        fieldsField.setAccessible(true);
+        java.lang.reflect.Field headField = storage.getClass().getDeclaredField("head");
+        headField.setAccessible(true);
+        Object[] fields = (Object[]) fieldsField.get(storage);
+        int firstWritten = ((headField.getInt(storage) + 1) & ((fields.length >> 1) - 1)) << 1;
+        Object type = fields[firstWritten], value = fields[firstWritten + 1];
+        packet.resetReader();
+        assertSame(fields, fieldsField.get(storage));
+        assertSame(type, fields[firstWritten]);
+        assertSame(value, fields[firstWritten + 1]);
+        for (int i = 0; i < 4096; i++) assertEquals(i, packet.read(Types.INT));
+        assertEquals(-1, packet.read(Types.INT));
+        assertTrue(packet.areStoredPacketValuesEmpty());
+    }
+
+    @Test
+    void wrappedPartialStagesGrowAndSerializeInOrder() {
+        PacketWrapperImpl packet = new PacketWrapperImpl(-1, null, null);
+        for (int i = 0; i < 4; i++) packet.write(Types.INT, i);
+        packet.resetReader();
+        assertEquals(0, packet.read(Types.INT));
+        assertEquals(1, packet.passthrough(Types.INT));
+        for (int i = 4; i < 100; i++) packet.write(Types.INT, i);
+        packet.rewindReader(2);
+        assertEquals(98, packet.read(Types.INT));
+        assertEquals(99, packet.read(Types.INT));
+        packet.resetReader();
+        ByteBuf output = Unpooled.buffer();
+        try {
+            packet.writeProcessedValues(output);
+            assertEquals(1, output.readInt());
+            for (int i = 4; i < 98; i++) assertEquals(i, output.readInt());
+            assertEquals(2, output.readInt());
+            assertEquals(3, output.readInt());
+            assertFalse(output.isReadable());
+        } finally { output.release(); }
+    }
+
+    @Test
+    void clearingInputDiscardsUnreadFieldsAndPreservesWrittenOnes() {
+        PacketWrapperImpl packet = new PacketWrapperImpl(-1, null, null);
+        packet.write(Types.STRING, "discard");
+        packet.write(Types.INT, 2);
+        packet.resetReader();
+        packet.write(Types.INT, 3);
+        packet.clearInputBuffer();
+        assertEquals(3, packet.get(Types.INT, 0));
+        assertFalse(packet.isReadable(Types.STRING, 0));
+        assertThrows(IllegalArgumentException.class, () -> packet.rewindReader(2));
+        assertEquals(3, packet.get(Types.INT, 0));
+        packet.resetReader();
+        assertEquals(3, packet.read(Types.INT));
+        assertTrue(packet.areStoredPacketValuesEmpty());
+    }
+
+    @Test
+    void consumedAndClearedFieldsReleaseTheirReferences() throws Exception {
+        PacketWrapperImpl packet = new PacketWrapperImpl(-1, null, null);
+        for (int i = 0; i < 100; i++) packet.write(Types.STRING, new String(new char[100]));
+        packet.resetReader();
+        for (int i = 0; i < 100; i++) packet.read(Types.STRING);
+        java.lang.reflect.Field storageField = PacketWrapperImpl.class.getDeclaredField("packetValues");
+        storageField.setAccessible(true);
+        Object storage = storageField.get(packet);
+        java.lang.reflect.Field fieldsField = storage.getClass().getDeclaredField("fields");
+        fieldsField.setAccessible(true);
+        for (Object value : (Object[]) fieldsField.get(storage)) assertNull(value);
+        packet.write(Types.STRING, "clear");
+        packet.clearPacket();
+        for (Object value : (Object[]) fieldsField.get(storage)) assertNull(value);
+    }
+
+    @Test
     void compatiblePassthroughKeepsOriginalStoredType() {
         PacketWrapperImpl packet = new PacketWrapperImpl(-1, null, null);
         IntType compatible = new IntType();
