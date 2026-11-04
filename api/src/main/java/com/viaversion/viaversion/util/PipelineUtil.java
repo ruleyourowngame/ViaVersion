@@ -162,12 +162,18 @@ public final class PipelineUtil {
     }
 
     public static @Nullable ChannelHandlerContext getPreviousContext(String name, ChannelPipeline pipeline) {
-        String previous = null;
-        for (String entry : pipeline.toMap().keySet()) {
+        // Only names are needed: toMap also allocates a linked-map node for every handler.
+        final List<String> names = pipeline.names();
+        for (int i = 0; i < names.size(); i++) {
+            final String entry = names.get(i);
             if (entry.equals(name)) {
-                return pipeline.context(previous);
+                // DefaultChannelPipeline.names includes its internal tail, while toMap excludes it.
+                // A name without a public context must not turn that tail into a valid target.
+                if (pipeline.context(entry) == null) {
+                    return null;
+                }
+                return pipeline.context(i == 0 ? null : names.get(i - 1));
             }
-            previous = entry;
         }
         return null;
     }
