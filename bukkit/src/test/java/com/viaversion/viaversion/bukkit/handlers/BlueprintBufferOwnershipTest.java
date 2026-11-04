@@ -31,18 +31,17 @@ import static org.junit.jupiter.api.Assertions.*;
 
 final class BlueprintBufferOwnershipTest {
     @Test
-    void optInTransfersExclusiveBufferWithIndependentReference() {
+    void optInBorrowsExclusiveBufferUntilTheEnclosingEncoderReturns() {
         EmbeddedChannel channel = new EmbeddedChannel();
         channel.attr(AttributeKey.valueOf("blueprint:outbound-buffer-ownership")).set(1);
         ByteBuf input = Unpooled.buffer().writeInt(123);
         ByteBuf prepared = BlueprintBufferOwnership.prepare(channel, input, channel.alloc());
         try {
             assertSame(input, prepared);
-            assertEquals(2, input.refCnt());
+            assertEquals(1, input.refCnt());
             prepared.setInt(0, 456);
             assertEquals(456, input.getInt(0));
         } finally {
-            prepared.release();
             assertEquals(1, input.refCnt());
             input.release();
             channel.finish();

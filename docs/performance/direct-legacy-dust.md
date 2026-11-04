@@ -12,10 +12,19 @@ Before accepting a plan, two sample payloads are compared byte for byte against 
 
 The wire layouts are intentionally bounded at 26.3. A new version or change to a marked handler requires reviewing its dust behavior and extending the equivalence matrix. Registering a custom handler, reader or protocol remains the supported way to regain ordinary processing; extensions must only apply the marker if they uphold its documented promise. Registrations follow the ordinary pipeline's threading rules.
 
+## Connection task lifetime and outbound ownership
+
+Blueprint's capability path borrows a verified exclusive input until `BukkitEncodeHandler.encode` returns. It does not retain before translation. Netty's enclosing `MessageToMessageEncoder` releases that input; only a copied buffer is released by Via's `finally`. Output retains its own reference. This lets the ref-count-one guard run on the intended outbound path while arbitrary shared input still takes an isolated copy. Success, cancellation and failure ownership tests remain in place, and the actual outbound encoder is tested against ordinary wire output with the fast-path counter asserted for exclusive and shared inputs.
+
+Blueprint block acknowledgements keep at most one main-thread hop or delayed send pending per connection. Arrivals before the hop coalesce into the highest sequence, which is frozen before the two-game-tick ordering wait. Later arrivals wait for a new batch and its own delay, so a callback cannot acknowledge work received after its hop. Duplicate/older sequences schedule nothing. Connection removal invalidates queued batches. This can conservatively delay later acknowledgements by another batch interval; it preserves the minimum ordering delay behind block updates.
+
+The configuration bridge keeps its scheduled deadline future and cancels it on completion, clear or storage removal. Generation checks still protect against a stale callback from an older phase. Cancelling releases the callback's captured connection/state rather than retaining it for the rest of the deadline.
+
 ## Validation
 
-The clean JDK 21 shadow build and 90 tests (85 common, 5 Bukkit) pass. `plugin.yml` embeds `5.12.2-arch.8`.
+The clean JDK 21 shadow build and 95 tests (86 common, 9 Bukkit) pass. `plugin.yml` embeds `5.12.2-arch.8`.
 
+- The Bukkit outbound encoder runs the real protocol path for 1.13, 1.20.5 and 26.3 with/without the ownership capability and with/without sharing. It checks identical wire bytes, fast-path use and reference counts. Acknowledgement tests cover large bursts, late arrivals and removal; deadline tests assert cancellation at every exit.
 - For every registered client version from 1.9 through 26.3, 128 deterministic payloads compare enabled and ordinary full connection transforms, including signed zero, maximum finite values, subnormals and random finite bit patterns. Every eligible packet must increment the fast-path counter, so an unnoticed fallback cannot pass the comparison.
 - Fallback tests preserve bytes, indexes and reference counts for malformed data, NaN/infinities, sharing, read-only/derived buffers, byte order, capacity, configuration, inactive/pending connections, debug logging and unknown/changed versions.
 - Tests exercise custom handlers and readers before and after plan creation, unknown transform overrides, changed particle ids/classifications and changed pipeline membership. Synthetic validation must not invoke custom callbacks.

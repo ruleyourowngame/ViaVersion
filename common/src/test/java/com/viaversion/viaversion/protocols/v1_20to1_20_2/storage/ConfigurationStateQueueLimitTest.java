@@ -28,6 +28,7 @@ import io.netty.channel.embedded.EmbeddedChannel;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.FutureTask;
 import java.util.concurrent.atomic.AtomicLong;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -46,7 +47,7 @@ class ConfigurationStateQueueLimitTest extends PlatformTestBase {
 
     private final AtomicLong clock = new AtomicLong(1_000L);
     // Deadline tasks the state armed, run by hand to stand in for the event loop firing them
-    private final List<Runnable> deadlines = new ArrayList<>();
+    private final List<FutureTask<Void>> deadlines = new ArrayList<>();
     private EmbeddedChannel channel;
     private UserConnectionImpl user;
 
@@ -236,6 +237,22 @@ class ConfigurationStateQueueLimitTest extends PlatformTestBase {
         assertTrue(user.isPendingDisconnect(), "but no more than one");
     }
 
+    @Test
+    void completedClearedAndRemovedPhasesCancelTheirScheduledDeadline() {
+        for (int ending = 0; ending < 3; ending++) {
+            final ConfigurationState state = state(1000, 1024 * 1024);
+            state.setBridgePhase(user, BridgePhase.PROFILE_SENT);
+            final FutureTask<Void> future = deadlines.get(deadlines.size() - 1);
+            assertFalse(future.isCancelled());
+            if (ending == 0) state.setBridgePhase(BridgePhase.NONE);
+            else if (ending == 1) state.clear();
+            else state.onRemove();
+            assertTrue(future.isCancelled());
+            future.run();
+            assertFalse(user.isPendingDisconnect());
+        }
+    }
+
     private void runDeadlines() {
         clock.addAndGet(TIMEOUT_NANOS + 1);
         for (final Runnable deadline : new ArrayList<>(deadlines)) {
@@ -246,7 +263,9 @@ class ConfigurationStateQueueLimitTest extends PlatformTestBase {
     private ConfigurationState state(final int maxPackets, final long maxBytes) {
         return new ConfigurationState(maxPackets, maxBytes, TIMEOUT_NANOS, clock::get, (user, task, delayNanos) -> {
             assertEquals(TIMEOUT_NANOS, delayNanos);
-            deadlines.add(task);
+            final FutureTask<Void> future = new FutureTask<>(task, null);
+            deadlines.add(future);
+            return future;
         });
     }
 

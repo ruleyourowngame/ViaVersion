@@ -31,7 +31,6 @@ import com.viaversion.viaversion.protocols.v1_18_2to1_19.packet.ClientboundPacke
 import com.viaversion.viaversion.protocols.v1_18_2to1_19.provider.AckSequenceProvider;
 import com.viaversion.viaversion.protocols.v1_18_2to1_19.storage.SequenceStorage;
 import java.util.UUID;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.logging.Level;
 import org.bukkit.entity.Player;
 
@@ -75,30 +74,42 @@ public final class BukkitAckSequenceProvider extends AckSequenceProvider {
     }
 
     /**
-     * Netty thread, while the sequenced packet is being decoded. Acks exactly {@code sequence}
-     * (not a later one that may arrive before this runs, which the server has not handled yet)
-     * from the thread that handles the player's packets, two of that thread's ticks after the
-     * hop to the main thread. By the hop the packet has been received, so it is handled in that
-     * thread's next tick at the latest and its block update leaves in that tick's end-of-tick
-     * flush; two ticks on, the ack follows both. The hop is there because Bukkit's player lookup
-     * is not safe on netty threads.
+     * Coalesce arrivals before the main-thread hop, then freeze that batch before waiting two
+     * game ticks. Packets arriving during that wait need their own hop and ordering delay.
      */
     private void handleSequenceBlueprint(final UserConnection connection, final int sequence) {
         final UUID uuid = connection.getProtocolInfo().getUuid();
-        if (uuid == null || !plugin.isEnabled()) {
-            return;
-        }
+        if (uuid == null || !plugin.isEnabled()) return;
 
         AckedSequence acked = connection.get(AckedSequence.class);
         if (acked == null) {
-            // only this connection's netty thread gets here, so nothing else puts one
+            // Only this connection's Netty thread installs the coordinator.
             acked = new AckedSequence();
             connection.put(acked);
         }
-        final AckedSequence ackedSequence = acked;
+        if (acked.offer(sequence)) scheduleBatch(connection, acked, uuid);
+    }
 
+    private void scheduleBatch(final UserConnection connection, final AckedSequence acked, final UUID uuid) {
+        if (!plugin.isEnabled() || !connection.isActive() || connection.isPendingDisconnect()) {
+            acked.onRemove();
+            return;
+        }
         plugin.getServer().getScheduler().scheduleSyncDelayedTask(plugin, () -> {
-            final Runnable send = () -> sendAck(connection, ackedSequence, sequence);
+            if (!plugin.isEnabled() || !connection.isActive() || connection.isPendingDisconnect()) {
+                acked.onRemove();
+                return;
+            }
+            final int sequence = acked.takeBatch();
+            if (sequence == -1) return;
+            final Runnable send = () -> {
+                try {
+                    if (connection.isActive() && !connection.isPendingDisconnect()) sendAck(connection, acked, sequence);
+                } finally {
+                    if (acked.finishBatch()) scheduleBatch(connection, acked, uuid);
+                }
+            };
+            // Bukkit lookup stays on the main thread; the frozen sequence was received before this hop.
             final Player player = plugin.getServer().getPlayer(uuid);
             if (player == null || !MicroServersSupport.runOnGameThread(player.getWorld(), send, 2L)) {
                 plugin.getServer().getScheduler().scheduleSyncDelayedTask(plugin, send, 2L);
@@ -119,12 +130,46 @@ public final class BukkitAckSequenceProvider extends AckSequenceProvider {
         }
     }
 
-    /** The highest sequence acked on this connection; acks are sent in increasing order only. */
-    private static final class AckedSequence implements StorableObject {
-        private final AtomicInteger highest = new AtomicInteger(-1);
+    /** At most one main-thread hop or ordered game-thread send is pending per connection. */
+    static final class AckedSequence implements StorableObject {
+        private int highest = -1;
+        private int waiting = -1;
+        private int inFlight = -1;
+        private boolean scheduled;
+        private boolean removed;
 
-        boolean raiseTo(final int sequence) {
-            return highest.getAndAccumulate(sequence, Math::max) < sequence;
+        synchronized boolean offer(final int sequence) {
+            if (removed || sequence <= highest || sequence <= waiting || sequence <= inFlight) return false;
+            waiting = sequence;
+            if (scheduled) return false;
+            scheduled = true;
+            return true;
+        }
+
+        synchronized int takeBatch() {
+            if (removed) return -1;
+            inFlight = waiting;
+            waiting = -1;
+            return inFlight;
+        }
+
+        synchronized boolean raiseTo(final int sequence) {
+            if (removed || sequence <= highest) return false;
+            highest = sequence;
+            return true;
+        }
+
+        synchronized boolean finishBatch() {
+            inFlight = -1;
+            if (!removed && waiting > highest) return true;
+            scheduled = false;
+            return false;
+        }
+
+        @Override
+        public synchronized void onRemove() {
+            removed = true;
+            waiting = -1;
         }
     }
 }

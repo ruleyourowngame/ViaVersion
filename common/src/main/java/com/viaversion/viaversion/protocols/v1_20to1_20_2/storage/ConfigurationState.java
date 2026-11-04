@@ -31,6 +31,7 @@ import io.netty.channel.Channel;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.function.LongSupplier;
 import org.checkerframework.checker.nullness.qual.Nullable;
@@ -65,6 +66,7 @@ public class ConfigurationState implements StorableObject {
     // Bumped whenever the client enters or leaves a bridge phase, so a deadline armed for an earlier phase
     // does nothing once that phase is over
     private int bridgeGeneration;
+    private @Nullable Future<?> deadline;
 
     public ConfigurationState() {
         this(MAX_CLIENTBOUND_QUEUED_PACKETS, MAX_CLIENTBOUND_QUEUED_BYTES, TimeUnit.SECONDS.toNanos(MAX_CLIENTBOUND_QUEUE_SECONDS),
@@ -92,6 +94,7 @@ public class ConfigurationState implements StorableObject {
             // Leaving play: the client is now waiting on us to finish a configuration phase
             bridgeStartNanos = nanoClock.getAsLong();
         }
+        if (bridgePhase == BridgePhase.NONE) cancelDeadline();
         this.bridgePhase = bridgePhase;
     }
 
@@ -111,19 +114,27 @@ public class ConfigurationState implements StorableObject {
         }
 
         final int generation = bridgeGeneration;
-        deadlineScheduler.schedule(user, () -> {
-            if (generation == bridgeGeneration && this.bridgePhase != BridgePhase.NONE) {
-                user.disconnect("Took too long to finish configuration");
+        deadline = deadlineScheduler.schedule(user, () -> {
+            if (generation == bridgeGeneration) {
+                deadline = null;
+                if (this.bridgePhase != BridgePhase.NONE) user.disconnect("Took too long to finish configuration");
             }
         }, maxClientboundQueueNanos);
     }
 
-    private static void scheduleOnEventLoop(final UserConnection user, final Runnable task, final long delayNanos) {
+    private void cancelDeadline() {
+        final Future<?> pending = deadline;
+        deadline = null;
+        if (pending != null) pending.cancel(false);
+    }
+
+    private static @Nullable Future<?> scheduleOnEventLoop(final UserConnection user, final Runnable task, final long delayNanos) {
         final Channel channel = user.getChannel();
         if (channel != null) {
             // Same thread as the packet handling that changes the phase
-            channel.eventLoop().schedule(task, delayNanos, TimeUnit.NANOSECONDS);
+            return channel.eventLoop().schedule(task, delayNanos, TimeUnit.NANOSECONDS);
         }
+        return null;
     }
 
     public @Nullable CompoundTag lastDimensionRegistry() {
@@ -202,6 +213,8 @@ public class ConfigurationState implements StorableObject {
 
     @Override
     public void onRemove() {
+        bridgeGeneration++;
+        cancelDeadline();
         for (final QueuedPacket packet : packetQueue) {
             packet.buf().release();
         }
@@ -271,6 +284,7 @@ public class ConfigurationState implements StorableObject {
     }
 
     public void clear() {
+        cancelDeadline();
         packetQueue.clear();
         if (bridgePhase != BridgePhase.NONE) {
             bridgeGeneration++;
@@ -297,7 +311,7 @@ public class ConfigurationState implements StorableObject {
 
     @FunctionalInterface
     interface DeadlineScheduler {
-        void schedule(UserConnection user, Runnable task, long delayNanos);
+        @Nullable Future<?> schedule(UserConnection user, Runnable task, long delayNanos);
     }
 
     public enum BridgePhase {

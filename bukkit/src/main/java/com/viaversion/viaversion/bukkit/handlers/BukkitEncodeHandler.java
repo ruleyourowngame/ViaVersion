@@ -63,7 +63,8 @@ public final class BukkitEncodeHandler extends ViaEncodeHandler {
 
             out.add(transformedBuf.retain());
         } finally {
-            transformedBuf.release();
+            // The enclosing encoder releases a borrowed input on both success and failure.
+            if (transformedBuf != bytebuf) transformedBuf.release();
         }
     }
 
