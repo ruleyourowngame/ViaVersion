@@ -221,15 +221,19 @@ public record EntityDataFilter(@Nullable EntityType type, boolean filterFamily,
             register();
         }
 
+        /** Registers a transformation which returns cancellation without requiring an event. */
+        public void handlerDirect(EntityDataHandler.Direct handler) {
+            handler(handler);
+        }
+
         // Mainly for pre-1.20.5 use
         public void mapDataType(Int2ObjectFunction<EntityDataType> updateFunction) {
-            handler((event, data) -> {
+            handlerDirect((connection, type, data) -> {
                 EntityDataType mappedType = updateFunction.apply(data.dataType().typeId());
                 if (mappedType != null) {
                     data.setDataType(mappedType);
-                } else {
-                    event.cancel();
                 }
+                return mappedType == null;
             });
         }
 
@@ -241,7 +245,7 @@ public record EntityDataFilter(@Nullable EntityType type, boolean filterFamily,
          */
         public void cancel(int index) {
             this.index = index;
-            handler((event, data) -> event.cancel());
+            handlerDirect((connection, type, data) -> true);
         }
 
         /**
@@ -253,7 +257,10 @@ public record EntityDataFilter(@Nullable EntityType type, boolean filterFamily,
          */
         public void toIndex(int newIndex) {
             Preconditions.checkArgument(this.index != -1);
-            handler((event, data) -> event.setIndex(newIndex));
+            handlerDirect((connection, type, data) -> {
+                data.setId(newIndex);
+                return false;
+            });
         }
 
         /**
@@ -265,10 +272,11 @@ public record EntityDataFilter(@Nullable EntityType type, boolean filterFamily,
          */
         public void addIndex(int index) {
             Preconditions.checkArgument(this.index == -1);
-            handler((event, data) -> {
-                if (event.index() >= index) {
-                    event.setIndex(event.index() + 1);
+            handlerDirect((connection, type, data) -> {
+                if (data.id() >= index) {
+                    data.setId(data.id() + 1);
                 }
+                return false;
             });
         }
 
@@ -281,13 +289,14 @@ public record EntityDataFilter(@Nullable EntityType type, boolean filterFamily,
          */
         public void removeIndex(int index) {
             Preconditions.checkArgument(this.index == -1);
-            handler((event, data) -> {
-                int dataIndex = event.index();
+            handlerDirect((connection, type, data) -> {
+                int dataIndex = data.id();
                 if (dataIndex == index) {
-                    event.cancel();
+                    return true;
                 } else if (dataIndex > index) {
-                    event.setIndex(dataIndex - 1);
+                    data.setId(dataIndex - 1);
                 }
+                return false;
             });
         }
 
@@ -362,9 +371,10 @@ public record EntityDataFilter(@Nullable EntityType type, boolean filterFamily,
         public void register() {
             if (addedTypeIds.isEmpty() && removedTypeIds.isEmpty() && skippedTypeIds.isEmpty()) {
                 // Simple handler
-                rewriter.filter().handler((event, data) -> {
+                rewriter.filter().handlerDirect((connection, type, data) -> {
                     final EntityDataType dataType = mappedDataTypes.byId(data.dataType().typeId());
                     data.setDataType(dataType);
+                    return false;
                 });
                 return;
             }
@@ -372,14 +382,13 @@ public record EntityDataFilter(@Nullable EntityType type, boolean filterFamily,
             this.addedTypeIds.sort(IntComparators.NATURAL_COMPARATOR);
             this.removedTypeIds.sort(IntComparators.OPPOSITE_COMPARATOR);
 
-            rewriter.registerFilter(new EntityDataFilter((event, data) -> {
+            rewriter.registerFilter(new EntityDataFilter((EntityDataHandler.Direct) (connection, type, data) -> {
                 // Do not cancel removed elements yet so that filters can handle them (unless something sent an invalid packet for untracked entities)
                 final EntityDataType mappedType = mappedType(data.dataType());
                 if (mappedType != null) {
                     data.setDataType(mappedType);
-                } else if (event.entityType() == null) {
-                    event.cancel();
                 }
+                return mappedType == null && type == null;
             }));
         }
 
