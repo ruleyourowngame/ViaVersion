@@ -45,17 +45,19 @@ public class BulkChunkType1_8 extends Type<Chunk[]> {
         final boolean skyLight = input.readBoolean();
         final int count = Types.VAR_INT.readPrimitive(input);
         final Chunk[] chunks = new Chunk[count];
-        final ChunkBulkSection[] chunkInfo = new ChunkBulkSection[count];
+        final int[] chunkX = new int[count];
+        final int[] chunkZ = new int[count];
+        final int[] bitmasks = new int[count];
 
-        // Read metadata
-        for (int i = 0; i < chunkInfo.length; i++) {
-            chunkInfo[i] = new ChunkBulkSection(input, skyLight);
+        // The wire stores all headers before any payloads. Keep only the small metadata arrays.
+        for (int i = 0; i < count; i++) {
+            chunkX[i] = input.readInt();
+            chunkZ[i] = input.readInt();
+            bitmasks[i] = input.readUnsignedShort();
         }
-        // Read data
-        for (int i = 0; i < chunks.length; i++) {
-            final ChunkBulkSection chunkBulkSection = chunkInfo[i];
-            chunkBulkSection.readData(input);
-            chunks[i] = ChunkType1_8.deserialize(chunkBulkSection.chunkX, chunkBulkSection.chunkZ, true, skyLight, chunkBulkSection.bitmask, chunkBulkSection.data());
+        for (int i = 0; i < count; i++) {
+            chunks[i] = ChunkType1_8.deserialize(chunkX[i], chunkZ[i], true, skyLight, bitmasks[i],
+                input.readSlice(dataLength(bitmasks[i], skyLight)));
         }
 
         return chunks;
@@ -88,6 +90,10 @@ public class BulkChunkType1_8 extends Type<Chunk[]> {
         }
     }
 
+    private static int dataLength(final int bitmask, final boolean skyLight) {
+        return Integer.bitCount(bitmask) * (BLOCKS_BYTES + (skyLight ? 2 * LIGHT_BYTES : LIGHT_BYTES)) + BIOME_BYTES;
+    }
+
     public static final class ChunkBulkSection {
         private final int chunkX;
         private final int chunkZ;
@@ -98,8 +104,7 @@ public class BulkChunkType1_8 extends Type<Chunk[]> {
             this.chunkX = input.readInt();
             this.chunkZ = input.readInt();
             this.bitmask = input.readUnsignedShort();
-            final int setSections = Integer.bitCount(this.bitmask);
-            this.data = new byte[setSections * (BLOCKS_BYTES + (skyLight ? 2 * LIGHT_BYTES : LIGHT_BYTES)) + BIOME_BYTES];
+            this.data = new byte[dataLength(this.bitmask, skyLight)];
         }
 
         public void readData(final ByteBuf input) {
