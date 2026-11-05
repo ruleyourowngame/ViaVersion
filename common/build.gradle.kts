@@ -23,6 +23,14 @@ java {
     withJavadocJar()
 }
 
+tasks.register<JavaExec>("benchmarkUniformPalette") {
+    group = "verification"
+    description = "Measures allocations for fresh uniform chunk palettes across protocol remaps"
+    dependsOn(tasks.testClasses)
+    classpath = sourceSets.test.get().runtimeClasspath
+    mainClass.set("com.viaversion.viaversion.api.type.types.chunk.UniformPaletteAllocationBenchmark")
+}
+
 tasks.named<Jar>("sourcesJar") {
     from(project(":viaversion-api").sourceSets.main.get().allSource)
 }
