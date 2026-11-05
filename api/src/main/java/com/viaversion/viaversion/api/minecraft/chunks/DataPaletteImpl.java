@@ -185,6 +185,18 @@ public final class DataPaletteImpl implements DataPalette {
             return;
         }
 
+        // A uniform section cannot have mapping collisions. Keep its inverse lookup lazy,
+        // while updating one that later coordinate writes have already materialized.
+        if (oldSize == 1) {
+            final int mappedId = mapper.applyAsInt(palette.getInt(0));
+            palette.set(0, mappedId);
+            if (inversePalette != null) {
+                inversePalette.clear();
+                inversePalette.put(mappedId, 0);
+            }
+            return;
+        }
+
         int writeIndex = 0;
         int[] indexRemap = null;
         int firstCollision = 0;
