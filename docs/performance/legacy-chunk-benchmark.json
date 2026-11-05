@@ -1,0 +1,71 @@
+{
+  "jdk": 25,
+  "netty": "4.2.9.Final",
+  "flags": [
+    "-Xms256m",
+    "-Xmx512m",
+    "-XX:+UseCompactObjectHeaders",
+    "--sun-misc-unsafe-memory-access=allow"
+  ],
+  "batch": "Four chunks, masks1/0x81/0x5555/0xffff,128blockstates",
+  "warmup": 150,
+  "measured": 500,
+  "results": [
+    {
+      "run": 1,
+      "skyLight": false,
+      "copying": true,
+      "bytesPerPacket": 632024.85,
+      "nsPerPacket": 459991.5
+    },
+    {
+      "run": 1,
+      "skyLight": false,
+      "copying": false,
+      "bytesPerPacket": 354328.0,
+      "nsPerPacket": 478999.83
+    },
+    {
+      "run": 1,
+      "skyLight": true,
+      "copying": true,
+      "bytesPerPacket": 743480.0,
+      "nsPerPacket": 449930.58
+    },
+    {
+      "run": 1,
+      "skyLight": true,
+      "copying": false,
+      "bytesPerPacket": 410488.0,
+      "nsPerPacket": 487144.75
+    },
+    {
+      "run": 2,
+      "skyLight": false,
+      "copying": true,
+      "bytesPerPacket": 632024.85,
+      "nsPerPacket": 481560.33
+    },
+    {
+      "run": 2,
+      "skyLight": false,
+      "copying": false,
+      "bytesPerPacket": 354328.0,
+      "nsPerPacket": 471470.33
+    },
+    {
+      "run": 2,
+      "skyLight": true,
+      "copying": true,
+      "bytesPerPacket": 743480.0,
+      "nsPerPacket": 438909.25
+    },
+    {
+      "run": 2,
+      "skyLight": true,
+      "copying": false,
+      "bytesPerPacket": 410488.0,
+      "nsPerPacket": 451568.58
+    }
+  ]
+}

@@ -57,8 +57,8 @@ public class ChunkType1_8 extends Type<Chunk> {
         final boolean fullChunk = input.readBoolean();
         final int bitmask = input.readUnsignedShort();
         final int dataLength = Types.VAR_INT.readPrimitive(input);
-        final byte[] data = new byte[dataLength];
-        input.readBytes(data);
+        // Bound decoding to this payload; decoded palettes, lights and biomes own their data.
+        final ByteBuf data = input.readSlice(dataLength);
 
         // Check if the chunk is an unload packet and return early
         if (fullChunk && bitmask == 0) {
@@ -87,7 +87,16 @@ public class ChunkType1_8 extends Type<Chunk> {
     // Used for normal and bulk chunks
     public static Chunk deserialize(final int chunkX, final int chunkZ, final boolean fullChunk, final boolean skyLight, final int bitmask, final byte[] data) {
         final ByteBuf input = Unpooled.wrappedBuffer(data);
+        try {
+            return deserialize(chunkX, chunkZ, fullChunk, skyLight, bitmask, input);
+        } finally {
+            input.release();
+        }
+    }
 
+    // Borrowed, bounded payload: no reference is retained in the decoded chunk.
+    static Chunk deserialize(final int chunkX, final int chunkZ, final boolean fullChunk, final boolean skyLight,
+                             final int bitmask, final ByteBuf input) {
         final ChunkSection[] sections = new ChunkSection[16];
         int[] biomeData = null;
 
@@ -118,7 +127,6 @@ public class ChunkType1_8 extends Type<Chunk> {
                 biomeData[i] = input.readUnsignedByte();
             }
         }
-        input.release();
 
         return new BaseChunk(chunkX, chunkZ, fullChunk, false, bitmask, sections, biomeData, new ArrayList<>());
     }
