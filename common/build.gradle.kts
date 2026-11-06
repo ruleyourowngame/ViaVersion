@@ -23,6 +23,14 @@ java {
     withJavadocJar()
 }
 
+tasks.register<JavaExec>("benchmarkAdaptiveFields") {
+    group = "verification"
+    description = "Measures particle-shaped field storage and common float reads"
+    dependsOn(tasks.testClasses)
+    classpath = sourceSets.test.get().runtimeClasspath
+    mainClass.set("com.viaversion.viaversion.common.protocol.AdaptiveFieldAllocationBenchmark")
+}
+
 tasks.register<JavaExec>("benchmarkUniformPalette") {
     group = "verification"
     description = "Measures allocations for fresh uniform chunk palettes across protocol remaps"

@@ -31,6 +31,10 @@ import io.netty.buffer.ByteBuf;
 
 public class FloatType extends Type<Float> implements TypeConverter<Float> {
 
+    private static final Float ZERO = 0F;
+    private static final Float NEGATIVE_ZERO = -0F;
+    private static final Float ONE = 1F;
+
     public FloatType() {
         super(Float.class);
     }
@@ -49,7 +53,11 @@ public class FloatType extends Type<Float> implements TypeConverter<Float> {
     @Override
     @Deprecated
     public Float read(ByteBuf buffer) {
-        return buffer.readFloat();
+        final float value = buffer.readFloat();
+        // Float.valueOf does not cache even the zero offsets and unit scales common in particles.
+        if (value == 0F) return Float.floatToRawIntBits(value) == 0 ? ZERO : NEGATIVE_ZERO;
+        if (value == 1F) return ONE;
+        return value;
     }
 
     /**
