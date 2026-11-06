@@ -28,6 +28,7 @@ import com.viaversion.viaversion.api.minecraft.ClientWorld;
 import com.viaversion.viaversion.api.platform.ViaInjector;
 import com.viaversion.viaversion.api.protocol.Protocol;
 import com.viaversion.viaversion.api.protocol.packet.Direction;
+import com.viaversion.viaversion.api.protocol.packet.State;
 import com.viaversion.viaversion.api.protocol.packet.PacketTracker;
 import com.viaversion.viaversion.api.protocol.packet.PacketWrapper;
 import com.viaversion.viaversion.api.type.Types;
@@ -73,6 +74,11 @@ public class UserConnectionImpl implements UserConnection {
     private final boolean clientSide;
     private final boolean legacyDustFastPathEnabled;
     private LegacyDustFastPath legacyDustFastPath;
+    // Only capacities are learned. Packet objects, buffers and payloads never outlive their wrapper here.
+    private byte[] clientboundFieldCapacities;
+    private byte[] serverboundFieldCapacities;
+    private State clientboundCapacityState;
+    private State serverboundCapacityState;
     private boolean active = true;
     private boolean pendingDisconnect;
 
@@ -426,17 +432,52 @@ public class UserConnectionImpl implements UserConnection {
         }
 
         final int valuesReaderIndex = buf.readerIndex();
-        final PacketWrapperImpl wrapper = new PacketWrapperImpl(id, buf, this);
+        final State state = protocolInfo.getState(direction);
+        final State capacityState = direction == Direction.CLIENTBOUND ? clientboundCapacityState : serverboundCapacityState;
+        final byte[] capacities = capacityState != state ? null
+            : direction == Direction.CLIENTBOUND ? clientboundFieldCapacities : serverboundFieldCapacities;
+        final int expectedFields = capacities != null && id >= 0 && id < capacities.length ? capacities[id] : 4;
+        final PacketWrapperImpl wrapper = new PacketWrapperImpl(id, buf, this, expectedFields);
         final int previousMaxDepth = NestingLimiter.setMaxDepth(direction == Direction.SERVERBOUND ? MAX_SERVERBOUND_NESTING_DEPTH : -1);
         try {
-            protocolInfo.getPipeline().transform(direction, protocolInfo.getState(direction), wrapper);
+            protocolInfo.getPipeline().transform(direction, state, wrapper);
         } catch (final CancelException ex) {
             throw cancelSupplier.apply(ex);
         } finally {
             NestingLimiter.setMaxDepth(previousMaxDepth);
+            rememberFieldCapacity(direction, state, id, wrapper.fieldCapacityHint());
         }
 
         writeToBuffer(wrapper, buf, id, valuesReaderIndex);
+    }
+
+    private void rememberFieldCapacity(Direction direction, State state, int id, int capacity) {
+        // Bound both retained metadata and initial storage. State transitions discard old schemas;
+        // recording actual demand lets an unusually large packet's hint shrink on the next packet.
+        if (id < 0 || id >= 256) return;
+        byte[] capacities;
+        if (direction == Direction.CLIENTBOUND) {
+            if (clientboundCapacityState != state) {
+                clientboundFieldCapacities = null;
+                clientboundCapacityState = state;
+            }
+            if (clientboundFieldCapacities == null) {
+                if (capacity <= 4) return;
+                clientboundFieldCapacities = new byte[256];
+            }
+            capacities = clientboundFieldCapacities;
+        } else {
+            if (serverboundCapacityState != state) {
+                serverboundFieldCapacities = null;
+                serverboundCapacityState = state;
+            }
+            if (serverboundFieldCapacities == null) {
+                if (capacity <= 4) return;
+                serverboundFieldCapacities = new byte[256];
+            }
+            capacities = serverboundFieldCapacities;
+        }
+        capacities[id] = (byte) capacity;
     }
 
     private void writeToBuffer(final PacketWrapperImpl wrapper, final ByteBuf buf, final int originalId, final int originalReaderIndex) {

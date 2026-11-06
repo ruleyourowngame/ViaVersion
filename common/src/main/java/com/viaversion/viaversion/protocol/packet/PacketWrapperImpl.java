@@ -44,7 +44,7 @@ import java.util.UUID;
 import org.checkerframework.checker.nullness.qual.Nullable;
 
 public class PacketWrapperImpl implements PacketWrapper {
-    private final FieldBuffer packetValues = new FieldBuffer();
+    private final FieldBuffer packetValues;
     private final ByteBuf inputBuffer;
     private final UserConnection userConnection;
     private boolean send = true;
@@ -59,16 +59,25 @@ public class PacketWrapperImpl implements PacketWrapper {
     private int id;
 
     public PacketWrapperImpl(int packetId, @Nullable ByteBuf inputBuffer, UserConnection userConnection) {
+        this(packetId, inputBuffer, userConnection, 4);
+    }
+
+    /** A bounded allocation hint only; no packet contents or storage are shared between wrappers. */
+    public PacketWrapperImpl(int packetId, @Nullable ByteBuf inputBuffer, UserConnection userConnection, int expectedFields) {
         this.id = packetId;
         this.inputBuffer = inputBuffer;
         this.userConnection = userConnection;
+        this.packetValues = new FieldBuffer(expectedFields);
     }
 
     public PacketWrapperImpl(@Nullable PacketType packetType, @Nullable ByteBuf inputBuffer, UserConnection userConnection) {
+        this(packetType != null ? packetType.getId() : -1, inputBuffer, userConnection);
         this.packetType = packetType;
-        this.id = packetType != null ? packetType.getId() : -1;
-        this.inputBuffer = inputBuffer;
-        this.userConnection = userConnection;
+    }
+
+    public int fieldCapacityHint() {
+        int peak = Math.min(64, packetValues.peakCount);
+        return peak == 0 ? 0 : Math.max(4, Integer.highestOneBit(peak - 1) << 1);
     }
 
     @Override
@@ -670,6 +679,14 @@ public class PacketWrapperImpl implements PacketWrapper {
         private int head;
         private int readable;
         private int count;
+        private final int initialFields;
+        private int peakCount;
+
+        FieldBuffer(int expectedFields) {
+            // A large or stale hint must not amplify an unusually sized packet on later small packets.
+            int bounded = Math.max(4, Math.min(expectedFields, 64));
+            initialFields = Integer.highestOneBit(bounded - 1) << 1;
+        }
 
         int size() { return count - readable; }
         boolean isEmpty() { return size() == 0; }
@@ -686,7 +703,7 @@ public class PacketWrapperImpl implements PacketWrapper {
 
         void add(Type<?> type, Object value) {
             if (count == fields.length >> 1) {
-                Object[] grown = new Object[Math.max(8, Math.multiplyExact(fields.length, 2))];
+                Object[] grown = new Object[fields.length == 0 ? initialFields * 2 : Math.multiplyExact(fields.length, 2)];
                 for (int i = 0; i < count; i++) {
                     int source = slot(i);
                     grown[i * 2] = fields[source];
@@ -696,6 +713,7 @@ public class PacketWrapperImpl implements PacketWrapper {
                 head = 0;
             }
             int target = slot(count++);
+            peakCount = Math.max(peakCount, count);
             fields[target] = type;
             fields[target + 1] = value;
         }
