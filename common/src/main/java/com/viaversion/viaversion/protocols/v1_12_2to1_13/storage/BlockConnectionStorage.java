@@ -141,14 +141,15 @@ public class BlockConnectionStorage implements StorableObject {
 
         public void setBlockAt(int x, int y, int z, int blockState) {
             int index = encodeBlockPos(x, y, z);
-            if (blockState == blockStates[index]) {
+            final short oldState = blockStates[index];
+            if (blockState == oldState) {
                 return;
             }
 
             blockStates[index] = (short) blockState;
             if (blockState == 0) {
                 nonEmptyBlocks--;
-            } else {
+            } else if (oldState == 0) {
                 nonEmptyBlocks++;
             }
         }
