@@ -9,6 +9,9 @@ not target. No production packet code changes in this benchmark PR.
 `PacketFieldForwardingBenchmark` measures complete escaping wrappers with bounded
 hints, growth to 4,096 fields, eight full translation stages, partially consumed
 stages, overlapping rewinds and a first decode stage with no stored fields.
+Partial/reset and single-rewind cases include 63/64/65 and 4,095/4,096/4,097
+fields. `overlapRewind` moves eight fields across a one-field gap at 63 and 4,095
+fields, exercising the copying path rather than only full-ring cursor moves.
 `fullZero` deliberately underestimates demand. Integer payloads use cached boxed
 values so storage costs are isolated. The wrapper escapes through a volatile
 sink; read checksums prevent unused reads from disappearing. Correctness remains
@@ -61,7 +64,9 @@ on aarch64 with ZGC, compact headers and Netty4.2.9 showed:
 | Raw decode, 4 fields | 26.6 | 36.5 | 168 |
 | Raw decode, 4,096 fields | 25,343.8 | 26,337.6 | 131,272 |
 
-These are medians across three JVM forks, each reporting its nine-batch median.
+These were captured with the initial fixture at `14b49a01e`, before adding the
+non-power-of-two and eight-field overlap cases. They are medians across three
+JVM forks, each reporting its nine-batch median.
 The [complete data](rejected-full-ring-forwarding-results.csv) includes individual
 fork timings; the small raw cases have noticeable compilation variance. No
 allocation reduction occurred. The raw-path cost caused rejection despite the

@@ -48,6 +48,13 @@ public final class PacketFieldForwardingBenchmark {
                     packet.rewindReader(1);
                     result += packet.passthrough(Types.INT);
                 }
+            } else if (mode.equals("overlapRewind")) {
+                // These shapes leave one empty slot; rewinding eight fields overlaps the source.
+                for (int i = 0; i < fields; i++) {
+                    packet.rewindReader(8);
+                    for (int j = 0; j < 8; j++) result += packet.read(Types.INT);
+                    for (int j = 0; j < 8; j++) packet.write(Types.INT, (i + j) & 127);
+                }
             } else if (mode.equals("rewind")) {
                 for (int i = 0; i < fields; i++) {
                     packet.rewindReader(1);
@@ -71,13 +78,13 @@ public final class PacketFieldForwardingBenchmark {
         bean.setThreadAllocatedMemoryEnabled(true);
         System.out.println("JDK " + System.getProperty("java.version") + " " + System.getProperty("os.arch"));
         System.out.println("PacketWrapper source: " + PacketWrapperImpl.class.getProtectionDomain().getCodeSource().getLocation());
-        for (String mode : args.length == 0 ? new String[]{"full", "fullZero", "partial", "rewind", "raw"} : args) {
-            if (!java.util.Set.of("full", "fullZero", "partial", "rewind", "raw").contains(mode)) {
+        for (String mode : args.length == 0 ? new String[]{"full", "fullZero", "partial", "rewind", "raw", "overlapRewind"} : args) {
+            if (!java.util.Set.of("full", "fullZero", "partial", "rewind", "raw", "overlapRewind").contains(mode)) {
                 throw new IllegalArgumentException("Unknown benchmark mode: " + mode);
             }
             int[] sizes = mode.equals("full") ? new int[]{-1, 0, 1, 4, 15, 64, 4096}
                 : mode.equals("fullZero") ? new int[]{1, 4, 15, 64, 4096}
-                : mode.equals("raw") ? new int[]{0, 1, 4, 64, 4096} : new int[]{64, 4096};
+                : mode.equals("raw") ? new int[]{0, 1, 4, 64, 4096} : mode.equals("overlapRewind") ? new int[]{63, 4095} : new int[]{63, 64, 65, 4095, 4096, 4097};
             for (int requested : sizes) {
                 int fields = Math.max(0, requested);
                 int hint = mode.equals("fullZero") || requested == 0 ? 0 : (fields == 15 ? 16 : 4);
