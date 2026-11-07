@@ -56,6 +56,14 @@ tasks.register<JavaExec>("benchmarkFieldForwarding") {
     }
 }
 
+tasks.register<JavaExec>("benchmarkPipelineLinks") {
+    group = "verification"
+    description = "Measures predecessor context lookups with and without public name snapshots"
+    dependsOn(tasks.testClasses)
+    classpath = sourceSets.test.get().runtimeClasspath
+    mainClass.set("com.viaversion.viaversion.util.PipelineLookupBenchmark")
+}
+
 tasks.register<JavaExec>("benchmarkAdaptiveFields") {
     group = "verification"
     description = "Measures particle-shaped field storage and common float reads"
