@@ -31,6 +31,70 @@ import static org.junit.jupiter.api.Assertions.*;
 
 final class PacketFieldCursorTest {
     @Test
+    void passthroughStillCallsSubclassReadOverrides() {
+        class ObservedPacket extends PacketWrapperImpl {
+            int reads;
+            ObservedPacket(ByteBuf input) { super(-1, input, null, 0); }
+            @Override public <T> T read(com.viaversion.viaversion.api.type.Type<T> type) {
+                reads++;
+                return super.read(type);
+            }
+        }
+        ObservedPacket packet = new ObservedPacket(null);
+        packet.write(Types.INT, 37);
+        packet.resetReader();
+        assertEquals(37, packet.passthrough(Types.INT));
+        assertEquals(1, packet.reads);
+        assertEquals(37, packet.get(Types.INT, 0));
+        ByteBuf input = Unpooled.buffer().writeInt(73);
+        try {
+            ObservedPacket raw = new ObservedPacket(input);
+            assertEquals(73, raw.passthrough(Types.INT));
+            assertEquals(1, raw.reads);
+            assertEquals(73, raw.get(Types.INT, 0));
+        } finally { input.release(); }
+    }
+
+    @Test
+    void zeroHintsRemainIndependentAcrossClearsAndLateWrites() {
+        PacketWrapperImpl first = new PacketWrapperImpl(-1, null, null, 0);
+        PacketWrapperImpl second = new PacketWrapperImpl(-1, null, null, 0);
+        for (int i = 0; i < 20; i++) {
+            second.resetReader();
+            second.rewindReader(0);
+            second.clearInputBuffer();
+            second.clearPacket();
+            first.write(Types.INT, i);
+        }
+        assertTrue(second.areStoredPacketValuesEmpty());
+        assertEquals(0, second.fieldCapacityHint());
+        second.write(Types.STRING, "late");
+        second.resetReader();
+        assertEquals("late", second.read(Types.STRING));
+        second.clearPacket();
+        first.resetReader();
+        for (int i = 0; i < 20; i++) assertEquals(i, first.read(Types.INT));
+        assertTrue(first.areStoredPacketValuesEmpty());
+        assertTrue(second.areStoredPacketValuesEmpty());
+    }
+
+    @Test
+    void zeroHintCanPassThroughBufferFieldsAndThenRewindThem() {
+        ByteBuf input = Unpooled.buffer(), output = Unpooled.buffer();
+        try {
+            for (int i = 0; i < 100; i++) input.writeInt(i);
+            PacketWrapperImpl packet = new PacketWrapperImpl(-1, input, null, 0);
+            for (int i = 0; i < 50; i++) assertEquals(i, packet.read(Types.INT));
+            for (int i = 50; i < 100; i++) assertEquals(i, packet.passthrough(Types.INT));
+            packet.rewindReader(1);
+            assertEquals(99, packet.passthrough(Types.INT));
+            packet.writeProcessedValues(output);
+            for (int i = 50; i < 100; i++) assertEquals(i, output.readInt());
+            assertFalse(output.isReadable());
+        } finally { input.release(); output.release(); }
+    }
+
+    @Test
     void rewindsPreserveOrderWithFullOverlappingAndWrappedStorage() {
         for (int fields = 1; fields <= 64; fields++) {
             for (int consumed = 0; consumed <= fields; consumed++) {
@@ -178,7 +242,7 @@ final class PacketFieldCursorTest {
     void packedFieldsMatchDequeModelAcrossRandomOperations() {
         Random random = new Random(913791);
         for (int trial = 0; trial < 250; trial++) {
-            PacketWrapperImpl packet = new PacketWrapperImpl(-1, null, null);
+            PacketWrapperImpl packet = new PacketWrapperImpl(-1, null, null, trial % 2 == 0 ? 0 : 4);
             ArrayList<Integer> written = new ArrayList<>();
             ArrayDeque<Integer> readable = new ArrayDeque<>();
             for (int step = 0; step < 250; step++) {
