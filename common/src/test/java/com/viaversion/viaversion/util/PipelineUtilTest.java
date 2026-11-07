@@ -21,6 +21,8 @@ import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.channel.ChannelPipeline;
 import io.netty.channel.embedded.EmbeddedChannel;
+import java.lang.reflect.Proxy;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.ArrayList;
 import java.util.Random;
 import org.junit.jupiter.api.Assertions;
@@ -49,10 +51,74 @@ class PipelineUtilTest {
                 // Preserve the existing first-handler boundary behavior.
                 Assertions.assertThrows(NullPointerException.class,
                     () -> PipelineUtil.getPreviousContext(target, pipeline));
+                Assertions.assertThrows(NullPointerException.class,
+                    () -> PipelineUtil.getPreviousContext(target, pipeline, null));
                 continue;
             }
             Assertions.assertSame(expected, PipelineUtil.getPreviousContext(target, pipeline), target);
+            Assertions.assertSame(expected, PipelineUtil.getPreviousContext(target, pipeline, null), target);
         }
+    }
+
+    @Test
+    void linkedLookupDoesNotCreateANameSnapshot() {
+        final EmbeddedChannel channel = new EmbeddedChannel(new ChannelInboundHandlerAdapter());
+        try {
+            channel.pipeline().addLast("before", new ChannelInboundHandlerAdapter());
+            channel.pipeline().addLast("target", new ChannelInboundHandlerAdapter());
+            final AtomicInteger snapshots = new AtomicInteger();
+            final ChannelPipeline pipeline = (ChannelPipeline) Proxy.newProxyInstance(
+                ChannelPipeline.class.getClassLoader(), new Class<?>[]{ChannelPipeline.class}, (proxy, method, args) -> {
+                    if (method.getName().equals("names")) snapshots.incrementAndGet();
+                    return method.invoke(channel.pipeline(), args);
+                });
+            Assertions.assertSame(channel.pipeline().context("before"), PipelineUtil.getPreviousContext("target", pipeline));
+            Assertions.assertEquals(0, snapshots.get());
+            Assertions.assertSame(channel.pipeline().context("before"), PipelineUtil.getPreviousContext("target", pipeline, null));
+            Assertions.assertEquals(1, snapshots.get(), "disabled private access must use the public fallback");
+        } finally { channel.finish(); }
+    }
+
+    @Test
+    void unknownContextImplementationUsesThePublicFallback() {
+        final EmbeddedChannel channel = new EmbeddedChannel(new ChannelInboundHandlerAdapter());
+        try {
+            channel.pipeline().addLast("before", new ChannelInboundHandlerAdapter());
+            channel.pipeline().addLast("target", new ChannelInboundHandlerAdapter());
+            final ChannelHandlerContext actual = channel.pipeline().context("target");
+            final ChannelHandlerContext wrapper = (ChannelHandlerContext) Proxy.newProxyInstance(
+                ChannelHandlerContext.class.getClassLoader(), new Class<?>[]{ChannelHandlerContext.class},
+                (proxy, method, args) -> method.invoke(actual, args));
+            final AtomicInteger snapshots = new AtomicInteger();
+            final ChannelPipeline pipeline = (ChannelPipeline) Proxy.newProxyInstance(
+                ChannelPipeline.class.getClassLoader(), new Class<?>[]{ChannelPipeline.class}, (proxy, method, args) -> {
+                    if (method.getName().equals("names")) snapshots.incrementAndGet();
+                    if (method.getName().equals("context") && "target".equals(args[0])) return wrapper;
+                    return method.invoke(channel.pipeline(), args);
+                });
+            Assertions.assertSame(channel.pipeline().context("before"), PipelineUtil.getPreviousContext("target", pipeline));
+            Assertions.assertEquals(1, snapshots.get());
+        } finally { channel.finish(); }
+    }
+
+    @Test
+    void removingTheTargetDuringLookupDoesNotReuseAnOldContext() {
+        final EmbeddedChannel channel = new EmbeddedChannel(new ChannelInboundHandlerAdapter());
+        try {
+            channel.pipeline().addLast("before", new ChannelInboundHandlerAdapter());
+            channel.pipeline().addLast("target", new ChannelInboundHandlerAdapter());
+            final ChannelHandlerContext oldTarget = channel.pipeline().context("target");
+            final AtomicInteger lookups = new AtomicInteger();
+            final ChannelPipeline pipeline = (ChannelPipeline) Proxy.newProxyInstance(
+                ChannelPipeline.class.getClassLoader(), new Class<?>[]{ChannelPipeline.class}, (proxy, method, args) -> {
+                    if (method.getName().equals("context") && args[0].equals("target") && lookups.incrementAndGet() == 1) {
+                        channel.pipeline().remove("target");
+                        return oldTarget;
+                    }
+                    return method.invoke(channel.pipeline(), args);
+                });
+            Assertions.assertNull(PipelineUtil.getPreviousContext("target", pipeline));
+        } finally { channel.finish(); }
     }
 
     @Test

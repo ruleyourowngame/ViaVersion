@@ -19,8 +19,27 @@ dependencies {
     testRuntimeOnly(rootProject.libs.platformLauncher)
 }
 
+val testNettyVersion = providers.gradleProperty("testNettyVersion")
+if (testNettyVersion.isPresent) {
+    configurations.named("testRuntimeClasspath") {
+        resolutionStrategy.eachDependency {
+            if (requested.group == "io.netty" && requested.name == "netty-all") {
+                useVersion(testNettyVersion.get())
+            }
+        }
+    }
+}
+
 java {
     withJavadocJar()
+}
+
+tasks.register<JavaExec>("benchmarkPipelineLinks") {
+    group = "verification"
+    description = "Measures predecessor context lookups with and without public name snapshots"
+    dependsOn(tasks.testClasses)
+    classpath = sourceSets.test.get().runtimeClasspath
+    mainClass.set("com.viaversion.viaversion.util.PipelineLookupBenchmark")
 }
 
 tasks.register<JavaExec>("benchmarkAdaptiveFields") {
