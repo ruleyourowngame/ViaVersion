@@ -19,8 +19,41 @@ dependencies {
     testRuntimeOnly(rootProject.libs.platformLauncher)
 }
 
+val testNettyVersion = providers.gradleProperty("testNettyVersion")
+if (testNettyVersion.isPresent) {
+    configurations.named("testRuntimeClasspath") {
+        resolutionStrategy.eachDependency {
+            if (requested.group == "io.netty" && requested.name == "netty-all") {
+                useVersion(testNettyVersion.get())
+            }
+        }
+    }
+}
+
 java {
     withJavadocJar()
+}
+
+tasks.register<JavaExec>("benchmarkFieldForwarding") {
+    group = "verification"
+    description = "Measures packet-field transforms, allocation and worst-case CPU"
+    dependsOn(tasks.testClasses)
+    classpath = sourceSets.test.get().runtimeClasspath
+    mainClass.set("com.viaversion.viaversion.common.protocol.PacketFieldForwardingBenchmark")
+    val version = providers.gradleProperty("benchmarkJavaVersion").getOrElse("25").toInt()
+    javaLauncher.set(javaToolchains.launcherFor {
+        languageVersion.set(org.gradle.jvm.toolchain.JavaLanguageVersion.of(version))
+    })
+    jvmArgs("-XX:+UseZGC")
+    if (version >= 25) jvmArgs("-XX:+UseCompactObjectHeaders", "--sun-misc-unsafe-memory-access=allow")
+    val baseline = providers.gradleProperty("fieldBaselineClasses")
+    if (baseline.isPresent) {
+        val directory = file(baseline.get())
+        require(directory.resolve("com/viaversion/viaversion/protocol/packet/PacketWrapperImpl.class").isFile) {
+            "fieldBaselineClasses must contain the compiled baseline production classes"
+        }
+        classpath = files(directory) + classpath
+    }
 }
 
 tasks.register<JavaExec>("benchmarkAdaptiveFields") {

@@ -39,6 +39,26 @@ class AdaptiveFieldCapacityTest extends PlatformTestBase {
     }
 
     @Test
+    void failedPassthroughConsumesOnlyTheMismatchedFieldAndDoesNotWriteIt() {
+        UserConnectionImpl user = user();
+        try {
+            PacketWrapperImpl packet = new PacketWrapperImpl(-1, null, user, 0);
+            packet.write(Types.STRING, "discard");
+            packet.write(Types.INT, 42);
+            packet.resetReader();
+            var failure = assertThrows(com.viaversion.viaversion.exception.InformativeException.class,
+                () -> packet.passthrough(Types.INT));
+            assertTrue(failure.getCause().getMessage().contains("Unable to read type"));
+            assertFalse(packet.is(Types.STRING, 0));
+            assertEquals(42, packet.passthrough(Types.INT));
+            assertEquals(42, packet.get(Types.INT, 0));
+            packet.resetReader();
+            assertEquals(42, packet.read(Types.INT));
+            assertTrue(packet.areStoredPacketValuesEmpty());
+        } finally { user.getChannel().close(); }
+    }
+
+    @Test
     void connectionLearnsSeparateDirectionsAndFallsBackForOutOfRangeIds() throws Exception {
         UserConnectionImpl user = user();
         try {

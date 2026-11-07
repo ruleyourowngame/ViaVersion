@@ -1,0 +1,35 @@
+diff --git a/common/src/main/java/com/viaversion/viaversion/protocol/packet/PacketWrapperImpl.java b/common/src/main/java/com/viaversion/viaversion/protocol/packet/PacketWrapperImpl.java
+index d095ebc36..a18fa58fa 100644
+--- a/common/src/main/java/com/viaversion/viaversion/protocol/packet/PacketWrapperImpl.java
++++ b/common/src/main/java/com/viaversion/viaversion/protocol/packet/PacketWrapperImpl.java
+@@ -203,6 +203,11 @@ public class PacketWrapperImpl implements PacketWrapper {
+
+     @Override
+     public <T> T passthrough(Type<T> type) throws InformativeException {
++        if (getClass() == PacketWrapperImpl.class && !allActionsRead && packetValues.canForwardFullRing(type)) {
++            // Subclass read overrides and compatible-but-distinct types retain the original path.
++            //noinspection unchecked
++            return (T) packetValues.forwardFullRing();
++        }
+         Type<?> storedType = packetValues.readableSize() == 0 ? type : packetValues.readableType(0);
+         T value = read(type);
+         if (!allActionsRead) {
+@@ -718,6 +723,18 @@ public class PacketWrapperImpl implements PacketWrapper {
+             fields[target + 1] = value;
+         }
+
++        boolean canForwardFullRing(Type<?> type) {
++            return readable != 0 && count == fields.length >> 1 && fields[slot(0)] == type;
++        }
++
++        Object forwardFullRing() {
++            Object value = fields[slot(0) + 1];
++            // The old head is already the next written slot; no field references change.
++            head = (head + 1) & ((fields.length >> 1) - 1);
++            readable--;
++            return value;
++        }
++
+         void discardReadable() {
+             int source = slot(0);
+             fields[source] = null;
