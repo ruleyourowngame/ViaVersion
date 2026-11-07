@@ -29,12 +29,7 @@ public final class PipelineLookupBenchmark {
     private static volatile Object sink;
 
     private static ChannelHandlerContext original(String name, ChannelPipeline pipeline) {
-        String previous = null;
-        for (String entry : pipeline.toMap().keySet()) {
-            if (entry.equals(name)) return pipeline.context(previous);
-            previous = entry;
-        }
-        return null;
+        return PipelineUtil.getPreviousContext(name, pipeline, null);
     }
 
     private static void run(ChannelPipeline pipeline, String name, boolean candidate, int count) {
@@ -44,8 +39,10 @@ public final class PipelineLookupBenchmark {
     }
 
     public static void main(String[] args) {
+        System.out.println("Netty runtime: " + io.netty.util.Version.identify());
         final ThreadMXBean bean = (ThreadMXBean) ManagementFactory.getThreadMXBean();
         bean.setThreadAllocatedMemoryEnabled(true);
+        final int count = 200000;
         for (int size : new int[]{8, 16, 32}) {
             final EmbeddedChannel channel = new EmbeddedChannel(new ChannelInboundHandlerAdapter());
             try {
@@ -53,17 +50,30 @@ public final class PipelineLookupBenchmark {
                 for (int i = 0; i < size; i++) {
                     channel.pipeline().addLast("handler-" + i, new ChannelInboundHandlerAdapter());
                 }
-                final String target = "handler-" + (size - 1);
-                for (boolean candidate : new boolean[]{false, true}) {
-                    run(channel.pipeline(), target, candidate, 100000);
-                    final long thread = Thread.currentThread().getId();
-                    final long before = bean.getThreadAllocatedBytes(thread);
-                    final long start = System.nanoTime();
-                    run(channel.pipeline(), target, candidate, 1000000);
-                    final long elapsed = System.nanoTime() - start;
-                    final long allocated = bean.getThreadAllocatedBytes(thread) - before;
-                    System.out.printf("%d handlers, %s: %.1f bytes/lookup, %.1f ns/lookup%n",
-                        size, candidate ? "names" : "map", allocated / 1000000.0, elapsed / 1000000.0);
+                for (int position : new int[]{1, size / 2, size - 1}) {
+                    final String target = "handler-" + position;
+                    for (int warmup = 0; warmup < 4; warmup++) {
+                        run(channel.pipeline(), target, false, 100000);
+                        run(channel.pipeline(), target, true, 100000);
+                    }
+                    final long[][] allocated = new long[2][7], elapsed = new long[2][7];
+                    for (int round = 0; round < 7; round++) {
+                        for (int order = 0; order < 2; order++) {
+                            final int candidate = (round + order) & 1;
+                            final long thread = Thread.currentThread().getId();
+                            final long before = bean.getThreadAllocatedBytes(thread), start = System.nanoTime();
+                            run(channel.pipeline(), target, candidate == 1, count);
+                            elapsed[candidate][round] = System.nanoTime() - start;
+                            allocated[candidate][round] = bean.getThreadAllocatedBytes(thread) - before;
+                        }
+                    }
+                    for (int candidate = 0; candidate < 2; candidate++) {
+                        java.util.Arrays.sort(allocated[candidate]);
+                        java.util.Arrays.sort(elapsed[candidate]);
+                        System.out.printf("%d handlers target=%d %s: %.1f bytes/lookup, %.1f ns/lookup%n",
+                            size, position, candidate == 1 ? "links" : "names",
+                            allocated[candidate][3] / (double) count, elapsed[candidate][3] / (double) count);
+                    }
                 }
             } finally {
                 channel.finish();
