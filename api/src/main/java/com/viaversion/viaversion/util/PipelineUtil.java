@@ -30,13 +30,16 @@ import io.netty.handler.codec.MessageToByteEncoder;
 import io.netty.handler.codec.MessageToMessageDecoder;
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
+import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
 import java.util.ArrayList;
 import java.util.List;
 import org.checkerframework.checker.nullness.qual.Nullable;
 
 public final class PipelineUtil {
+    private static final @Nullable MethodHandle PREVIOUS_CONTEXT = previousContextGetter();
     private static final MethodHandle DECODE_METHOD = privateHandleUnchecked(ByteToMessageDecoder.class, "decode", ChannelHandlerContext.class, ByteBuf.class, List.class);
     private static final MethodHandle ENCODE_METHOD = privateHandleUnchecked(MessageToByteEncoder.class, "encode", ChannelHandlerContext.class, Object.class, ByteBuf.class);
     private static final MethodHandle MTM_DECODE = privateHandleUnchecked(MessageToMessageDecoder.class, "decode", ChannelHandlerContext.class, Object.class, List.class);
@@ -162,7 +165,35 @@ public final class PipelineUtil {
     }
 
     public static @Nullable ChannelHandlerContext getPreviousContext(String name, ChannelPipeline pipeline) {
-        // Only names are needed: toMap also allocates a linked-map node for every handler.
+        return getPreviousContext(name, pipeline, PREVIOUS_CONTEXT);
+    }
+
+    static @Nullable ChannelHandlerContext getPreviousContext(String name, ChannelPipeline pipeline, @Nullable MethodHandle previousContextGetter) {
+        if (name != null && previousContextGetter != null) {
+            final ChannelHandlerContext target = pipeline.context(name);
+            if (target == null) {
+                return null;
+            }
+            if (previousContextGetter.type().parameterType(0).isInstance(target)) {
+                final ChannelHandlerContext previous;
+                try {
+                    previous = (ChannelHandlerContext) previousContextGetter.invoke(target);
+                } catch (RuntimeException | Error error) {
+                    throw error;
+                } catch (Throwable unavailable) {
+                    return previousContextByNames(name, pipeline);
+                }
+                // Ignore the internal head and links to handlers removed since the target lookup.
+                if (previous != null && pipeline.context(name) == target && pipeline.context(previous.name()) == previous) {
+                    return previous;
+                }
+            }
+        }
+        return previousContextByNames(name, pipeline);
+    }
+
+    private static @Nullable ChannelHandlerContext previousContextByNames(String name, ChannelPipeline pipeline) {
+        // Public-API fallback for other context implementations and encapsulated Netty builds.
         final List<String> names = pipeline.names();
         for (int i = 0; i < names.size(); i++) {
             final String entry = names.get(i);
@@ -176,6 +207,20 @@ public final class PipelineUtil {
             }
         }
         return null;
+    }
+
+    private static @Nullable MethodHandle previousContextGetter() {
+        try {
+            final Class<?> context = Class.forName("io.netty.channel.AbstractChannelHandlerContext", false, ChannelHandlerContext.class.getClassLoader());
+            final Field previous = context.getDeclaredField("prev");
+            if (!ChannelHandlerContext.class.isAssignableFrom(previous.getType()) || !Modifier.isVolatile(previous.getModifiers())) {
+                return null;
+            }
+            previous.setAccessible(true);
+            return MethodHandles.lookup().unreflectGetter(previous);
+        } catch (ReflectiveOperationException | RuntimeException | LinkageError unavailable) {
+            return null;
+        }
     }
 
     private static MethodHandle privateHandle(final Class<?> clazz, final String method, final Class<?>... parameterTypes) throws NoSuchMethodException, IllegalAccessException {
