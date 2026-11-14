@@ -30,6 +30,14 @@ import java.util.logging.Level;
 
 public class MovementTransmitterProvider implements Provider {
 
+    /**
+     * {@link #sendPlayer(UserConnection)} for a caller that already holds the connection's
+     * {@link MovementTracker}, so an implementation can use it instead of looking it up again.
+     */
+    public void sendPlayer(final UserConnection userConnection, final MovementTracker movementTracker) {
+        sendPlayer(userConnection);
+    }
+
     public void sendPlayer(UserConnection userConnection) {
         userConnection.getChannel().eventLoop().execute(() -> {
             if (userConnection.getProtocolInfo().getClientState() != State.PLAY || !userConnection.getEntityTracker(Protocol1_8To1_9.class).hasClientEntityId()) {
