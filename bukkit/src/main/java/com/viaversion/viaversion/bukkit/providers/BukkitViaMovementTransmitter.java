@@ -19,6 +19,7 @@ package com.viaversion.viaversion.bukkit.providers;
 
 import com.viaversion.viaversion.api.Via;
 import com.viaversion.viaversion.api.connection.UserConnection;
+import com.viaversion.viaversion.bukkit.platform.MicroServersSupport;
 import com.viaversion.viaversion.bukkit.util.NMSUtil;
 import com.viaversion.viaversion.protocols.v1_8to1_9.provider.MovementTransmitterProvider;
 import com.viaversion.viaversion.protocols.v1_8to1_9.storage.MovementTracker;
@@ -41,6 +42,8 @@ public class BukkitViaMovementTransmitter extends MovementTransmitterProvider {
     private Object idlePacket2;
     // Use for nms
     private PlayerTicker ticker;
+    // Blueprint MicroServers: idle ticks handed to the loop that owns the player's world; null without them
+    private IdleTickDeferral deferral;
 
     public BukkitViaMovementTransmitter() {
         USE_NMS = Via.getConfig().isNMSPlayerTicking();
@@ -79,6 +82,11 @@ public class BukkitViaMovementTransmitter extends MovementTransmitterProvider {
             }
             ticker = new PlayerTicker(craftPlayer, entityPlayer, playerConnection, idlePacketClass,
                 e -> Via.getPlatform().getLogger().log(Level.WARNING, "Failed to handle idle packet", e));
+            final IdleTickDeferral.Loops loops = MicroServerLoops.detect();
+            if (loops != null) {
+                deferral = new IdleTickDeferral(loops, (player, tracker, packet, advance) -> ticker.tick(player, tracker, packet, advance));
+                Via.getPlatform().getLogger().info("Idle player ticks run on the MicroServer that ticks the player's world");
+            }
         }
     }
 
@@ -106,7 +114,12 @@ public class BukkitViaMovementTransmitter extends MovementTransmitterProvider {
         if (USE_NMS) {
             Player player = Bukkit.getPlayer(info.getProtocolInfo().getUuid());
             if (player != null) {
-                ticker.tick(player, movementTracker, movementTracker.isGround() ? idlePacket2 : idlePacket);
+                final Object packet = movementTracker.isGround() ? idlePacket2 : idlePacket;
+                if (deferral != null && Bukkit.isPrimaryThread()) {
+                    deferral.tick(player, movementTracker, packet);
+                } else {
+                    ticker.tick(player, movementTracker, packet, true);
+                }
             }
         } else {
             ChannelHandlerContext context = PipelineUtil.getContextBefore("decoder", info.getChannel().pipeline());
@@ -127,6 +140,13 @@ public class BukkitViaMovementTransmitter extends MovementTransmitterProvider {
                 }
                 tracker.incrementIdlePacket();
             });
+        }
+    }
+
+    @Override
+    public void afterIdlePass() {
+        if (deferral != null) {
+            deferral.flush();
         }
     }
 
@@ -168,20 +188,51 @@ public class BukkitViaMovementTransmitter extends MovementTransmitterProvider {
             }
         }
 
-        void tick(final Object player, final MovementTracker tracker, final Object packet) {
+        void tick(final Object player, final MovementTracker tracker, final Object packet, final boolean advance) {
             try {
                 final Object entityPlayer = (Object) getHandle.invokeExact(player);
                 final Object pc = (Object) connection.invokeExact(entityPlayer);
                 if (pc != null) {
                     handleFlying.invokeExact(pc, packet);
                     // Tick world
-                    tracker.incrementIdlePacket();
+                    if (advance) {
+                        tracker.incrementIdlePacket();
+                    }
                 }
             } catch (Throwable e) {
                 // Method#invoke wrapped whatever the tick threw, which was logged here instead of aborting the task's
                 // pass over the remaining connections.
                 failure.accept(e);
             }
+        }
+    }
+
+    /**
+     * {@link IdleTickDeferral.Loops} over Blueprint's MicroServers ({@link MicroServersSupport}). {@code null} off
+     * Blueprint, or with {@code -Dviaversion.idleTicksOnOwnerLoop=false}.
+     */
+    static final class MicroServerLoops implements IdleTickDeferral.Loops {
+
+        static IdleTickDeferral.Loops detect() {
+            if (!Boolean.parseBoolean(System.getProperty("viaversion.idleTicksOnOwnerLoop", "true")) || !MicroServersSupport.isBlueprint()) {
+                return null;
+            }
+            return new MicroServerLoops();
+        }
+
+        @Override
+        public Object ownerOf(final Object player) {
+            return MicroServersSupport.gameLoopOf(((Player) player).getWorld());
+        }
+
+        @Override
+        public void execute(final Object loop, final Runnable task) {
+            MicroServersSupport.execute(loop, task);
+        }
+
+        @Override
+        public boolean isOnline(final Object player) {
+            return ((Player) player).isOnline();
         }
     }
 }

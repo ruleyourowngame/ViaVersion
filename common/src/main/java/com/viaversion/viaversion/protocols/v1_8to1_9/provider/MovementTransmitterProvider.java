@@ -38,6 +38,13 @@ public class MovementTransmitterProvider implements Provider {
         sendPlayer(userConnection);
     }
 
+    /**
+     * Called by the idle packet task after each pass over the connections, on the thread it runs on, so an
+     * implementation that batched that pass's players can hand them on.
+     */
+    public void afterIdlePass() {
+    }
+
     public void sendPlayer(UserConnection userConnection) {
         userConnection.getChannel().eventLoop().execute(() -> {
             if (userConnection.getProtocolInfo().getClientState() != State.PLAY || !userConnection.getEntityTracker(Protocol1_8To1_9.class).hasClientEntityId()) {

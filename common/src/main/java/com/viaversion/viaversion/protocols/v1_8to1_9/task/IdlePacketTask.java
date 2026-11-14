@@ -43,5 +43,6 @@ public final class IdlePacketTask implements Runnable {
                 transmitter.sendPlayer(connection, tracker);
             }
         }
+        transmitter.afterIdlePass();
     }
 }

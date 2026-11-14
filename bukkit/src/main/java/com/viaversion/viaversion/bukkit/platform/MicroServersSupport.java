@@ -83,6 +83,37 @@ public final class MicroServersSupport {
         }
     }
 
+    /**
+     * The game MicroServer that ticks {@code world}, or {@code null} when the main thread does (or this is not
+     * Blueprint).
+     */
+    public static Object gameLoopOf(final World world) {
+        if (Domains.OF == null) {
+            return null;
+        }
+        try {
+            final Object domain = Domains.OF.invoke(null, world);
+            return domain == null || (Boolean) Domains.IS_GLOBAL.invoke(domain) ? null : domain;
+        } catch (final ReflectiveOperationException | RuntimeException e) {
+            return null;
+        }
+    }
+
+    /**
+     * Runs {@code task} on {@code gameLoop}'s thread at the start of its next tick ({@code MicroServer#execute}).
+     *
+     * @throws IllegalStateException when the loop has stopped, or the call failed
+     */
+    public static void execute(final Object gameLoop, final Runnable task) {
+        try {
+            Domains.EXECUTE.invoke(gameLoop, task);
+        } catch (final java.lang.reflect.InvocationTargetException e) {
+            throw new IllegalStateException("MicroServer#execute failed", e.getCause());
+        } catch (final ReflectiveOperationException | RuntimeException e) {
+            throw new IllegalStateException("MicroServer#execute failed", e);
+        }
+    }
+
     /** The main-thread fallback can't order block acks behind a game thread, so say so once. */
     private static void warnDomainsOnce(final String reason, final Throwable cause) {
         if (WARNED_DOMAINS.compareAndSet(false, true)) {
@@ -96,6 +127,7 @@ public final class MicroServersSupport {
         static final Method OF;
         static final Method IS_GLOBAL;
         static final Method RUN_TASK_TIMER;
+        static final Method EXECUTE;
         /** Set when Blueprint is present but its API did not resolve; null off Blueprint. */
         static final Throwable FAILURE;
 
@@ -103,6 +135,7 @@ public final class MicroServersSupport {
             Method of = null;
             Method isGlobal = null;
             Method runTaskTimer = null;
+            Method execute = null;
             Throwable failure = null;
             Class<?> microServers = null;
             try {
@@ -115,6 +148,7 @@ public final class MicroServersSupport {
                     final Class<?> microServer = Class.forName("dev.reximian9k.spigot.micro.MicroServer");
                     isGlobal = microServer.getMethod("isGlobal");
                     runTaskTimer = microServer.getMethod("runTaskTimer", Runnable.class, long.class, long.class);
+                    execute = microServer.getMethod("execute", Runnable.class);
                     of = microServers.getMethod("of", World.class);
                 } catch (final ReflectiveOperationException | LinkageError e) {
                     of = null;
@@ -124,6 +158,7 @@ public final class MicroServersSupport {
             OF = of;
             IS_GLOBAL = isGlobal;
             RUN_TASK_TIMER = runTaskTimer;
+            EXECUTE = execute;
             FAILURE = failure;
         }
     }
