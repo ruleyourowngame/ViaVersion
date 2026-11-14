@@ -24,9 +24,12 @@ import com.viaversion.viaversion.protocols.v1_8to1_9.provider.MovementTransmitte
 import com.viaversion.viaversion.protocols.v1_8to1_9.storage.MovementTracker;
 import com.viaversion.viaversion.util.PipelineUtil;
 import io.netty.channel.ChannelHandlerContext;
+import java.lang.invoke.MethodHandle;
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.MethodType;
 import java.lang.reflect.Field;
-import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.util.function.Consumer;
 import java.util.logging.Level;
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
@@ -37,9 +40,7 @@ public class BukkitViaMovementTransmitter extends MovementTransmitterProvider {
     private Object idlePacket;
     private Object idlePacket2;
     // Use for nms
-    private Method getHandle;
-    private Field connection;
-    private Method handleFlying;
+    private PlayerTicker ticker;
 
     public BukkitViaMovementTransmitter() {
         USE_NMS = Via.getConfig().isNMSPlayerTicking();
@@ -62,55 +63,50 @@ public class BukkitViaMovementTransmitter extends MovementTransmitterProvider {
             throw new RuntimeException("Couldn't make player idle packet, help!", e);
         }
         if (USE_NMS) {
+            final Class<?> craftPlayer;
+            final Class<?> entityPlayer;
+            final Class<?> playerConnection;
             try {
-                getHandle = NMSUtil.obc("entity.CraftPlayer").getDeclaredMethod("getHandle");
-            } catch (NoSuchMethodException | ClassNotFoundException e) {
+                craftPlayer = NMSUtil.obc("entity.CraftPlayer");
+            } catch (ClassNotFoundException e) {
                 throw new RuntimeException("Couldn't find CraftPlayer", e);
             }
-
             try {
-                connection = NMSUtil.nms("EntityPlayer").getDeclaredField("playerConnection");
-            } catch (NoSuchFieldException | ClassNotFoundException e) {
+                entityPlayer = NMSUtil.nms("EntityPlayer");
+                playerConnection = NMSUtil.nms("PlayerConnection");
+            } catch (ClassNotFoundException e) {
                 throw new RuntimeException("Couldn't find Player Connection", e);
             }
-
-            try {
-                handleFlying = NMSUtil.nms("PlayerConnection").getDeclaredMethod("a", idlePacketClass);
-            } catch (NoSuchMethodException | ClassNotFoundException e) {
-                throw new RuntimeException("Couldn't find CraftPlayer", e);
-            }
+            ticker = new PlayerTicker(craftPlayer, entityPlayer, playerConnection, idlePacketClass,
+                e -> Via.getPlatform().getLogger().log(Level.WARNING, "Failed to handle idle packet", e));
         }
     }
 
     public Object getFlyingPacket() {
-        if (idlePacket == null) throw new NullPointerException("Could not locate flying packet");
+        if (idlePacket == null)
+            throw new NullPointerException("Could not locate flying packet");
 
         return idlePacket;
     }
 
     public Object getGroundPacket() {
-        if (idlePacket == null) throw new NullPointerException("Could not locate flying packet");
+        if (idlePacket == null)
+            throw new NullPointerException("Could not locate flying packet");
 
         return idlePacket2;
     }
 
     @Override
     public void sendPlayer(UserConnection info) {
+        sendPlayer(info, info.get(MovementTracker.class));
+    }
+
+    @Override
+    public void sendPlayer(final UserConnection info, final MovementTracker movementTracker) {
         if (USE_NMS) {
             Player player = Bukkit.getPlayer(info.getProtocolInfo().getUuid());
             if (player != null) {
-                try {
-                    // Tick player
-                    Object entityPlayer = getHandle.invoke(player);
-                    Object pc = connection.get(entityPlayer);
-                    if (pc != null) {
-                        handleFlying.invoke(pc, (info.get(MovementTracker.class).isGround() ? idlePacket2 : idlePacket));
-                        // Tick world
-                        info.get(MovementTracker.class).incrementIdlePacket();
-                    }
-                } catch (IllegalAccessException | InvocationTargetException e) {
-                    Via.getPlatform().getLogger().log(Level.WARNING, "Failed to handle idle packet", e);
-                }
+                ticker.tick(player, movementTracker, movementTracker.isGround() ? idlePacket2 : idlePacket);
             }
         } else {
             ChannelHandlerContext context = PipelineUtil.getContextBefore("decoder", info.getChannel().pipeline());
@@ -119,18 +115,73 @@ public class BukkitViaMovementTransmitter extends MovementTransmitterProvider {
             }
 
             info.getChannel().eventLoop().execute(() -> {
-                MovementTracker movementTracker = info.get(MovementTracker.class);
-                if (movementTracker == null) {
+                MovementTracker tracker = info.get(MovementTracker.class);
+                if (tracker == null) {
                     return;
                 }
 
-                if (movementTracker.isGround()) {
+                if (tracker.isGround()) {
                     context.fireChannelRead(getGroundPacket());
                 } else {
                     context.fireChannelRead(getFlyingPacket());
                 }
-                movementTracker.incrementIdlePacket();
+                tracker.incrementIdlePacket();
             });
+        }
+    }
+
+    /**
+     * Ticks a player the way a 1.8 client's idle flying packet does: {@code PlayerConnection#a(PacketPlayInFlying)}
+     * on the player's connection. The handles are resolved once; through {@link Method#invoke} every idle player
+     * paid three reflective calls per tick, on the main thread.
+     */
+    static final class PlayerTicker {
+        private final MethodHandle getHandle;    // (CraftPlayer) -> EntityPlayer
+        private final MethodHandle connection;   // (Object) -> PlayerConnection
+        private final MethodHandle handleFlying; // (Object, Object) -> void
+        private final Consumer<Throwable> failure;
+
+        PlayerTicker(final Class<?> craftPlayer, final Class<?> entityPlayer, final Class<?> playerConnection,
+                     final Class<?> flyingPacket, final Consumer<Throwable> failure) {
+            this.failure = failure;
+            final MethodHandles.Lookup lookup = MethodHandles.lookup();
+            try {
+                final Method handle = craftPlayer.getDeclaredMethod("getHandle");
+                handle.setAccessible(true);
+                this.getHandle = lookup.unreflect(handle).asType(MethodType.methodType(Object.class, Object.class));
+            } catch (ReflectiveOperationException | RuntimeException e) {
+                throw new RuntimeException("Couldn't find CraftPlayer", e);
+            }
+            try {
+                final Field field = entityPlayer.getDeclaredField("playerConnection");
+                field.setAccessible(true);
+                this.connection = lookup.unreflectGetter(field).asType(MethodType.methodType(Object.class, Object.class));
+            } catch (ReflectiveOperationException | RuntimeException e) {
+                throw new RuntimeException("Couldn't find Player Connection", e);
+            }
+            try {
+                final Method flying = playerConnection.getDeclaredMethod("a", flyingPacket);
+                flying.setAccessible(true);
+                this.handleFlying = lookup.unreflect(flying).asType(MethodType.methodType(void.class, Object.class, Object.class));
+            } catch (ReflectiveOperationException | RuntimeException e) {
+                throw new RuntimeException("Couldn't find CraftPlayer", e);
+            }
+        }
+
+        void tick(final Object player, final MovementTracker tracker, final Object packet) {
+            try {
+                final Object entityPlayer = (Object) getHandle.invokeExact(player);
+                final Object pc = (Object) connection.invokeExact(entityPlayer);
+                if (pc != null) {
+                    handleFlying.invokeExact(pc, packet);
+                    // Tick world
+                    tracker.incrementIdlePacket();
+                }
+            } catch (Throwable e) {
+                // Method#invoke wrapped whatever the tick threw, which was logged here instead of aborting the task's
+                // pass over the remaining connections.
+                failure.accept(e);
+            }
         }
     }
 }
