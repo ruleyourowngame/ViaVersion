@@ -68,7 +68,7 @@ class BukkitIdlePlayerTickerTest {
         final long before = tracker.getNextIdlePacket();
         final Flying packet = new Flying();
 
-        ticker.tick(player, tracker, packet);
+        ticker.tick(player, tracker, packet, true);
 
         assertEquals(List.of(packet), player.handle.playerConnection.handled);
         assertTrue(tracker.getNextIdlePacket() > before, "the next idle packet is scheduled");
@@ -81,7 +81,7 @@ class BukkitIdlePlayerTickerTest {
         final MovementTracker tracker = new MovementTracker();
         final long before = tracker.getNextIdlePacket();
 
-        ticker.tick(player, tracker, new Flying());
+        ticker.tick(player, tracker, new Flying(), true);
 
         assertEquals(before, tracker.getNextIdlePacket());
         assertEquals(List.of(), failures);
@@ -96,7 +96,7 @@ class BukkitIdlePlayerTickerTest {
         final MovementTracker tracker = new MovementTracker();
         final long before = tracker.getNextIdlePacket();
 
-        assertDoesNotThrow(() -> ticker.tick(player, tracker, new Flying()));
+        assertDoesNotThrow(() -> ticker.tick(player, tracker, new Flying(), true));
 
         assertEquals(1, failures.size());
         assertEquals("tick failed", failures.get(0).getMessage());
@@ -105,7 +105,7 @@ class BukkitIdlePlayerTickerTest {
 
     @Test
     void anObjectThatIsNotACraftPlayerIsReportedNotThrown() {
-        assertDoesNotThrow(() -> ticker.tick(new Object(), new MovementTracker(), new Flying()));
+        assertDoesNotThrow(() -> ticker.tick(new Object(), new MovementTracker(), new Flying(), true));
         assertEquals(1, failures.size());
         assertInstanceOf(ClassCastException.class, failures.get(0));
     }
