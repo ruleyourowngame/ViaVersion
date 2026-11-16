@@ -39,10 +39,12 @@ public class MovementTransmitterProvider implements Provider {
     }
 
     /**
-     * Called by the idle packet task after each pass over the connections, on the thread it runs on, so an
-     * implementation that batched that pass's players can hand them on.
+     * Called by the idle packet task at the start of each run, on the thread it runs on. An implementation that
+     * checks the players itself (on the threads that tick them, say) does so and returns true, and the task skips
+     * its own pass over the connections.
      */
-    public void afterIdlePass() {
+    public boolean runIdlePass() {
+        return false;
     }
 
     public void sendPlayer(UserConnection userConnection) {

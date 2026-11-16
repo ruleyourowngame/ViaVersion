@@ -18,6 +18,7 @@
 package com.viaversion.viaversion.bukkit.providers;
 
 import com.viaversion.viaversion.api.Via;
+import com.viaversion.viaversion.api.connection.ConnectionManager;
 import com.viaversion.viaversion.api.connection.UserConnection;
 import com.viaversion.viaversion.bukkit.platform.MicroServersSupport;
 import com.viaversion.viaversion.bukkit.util.NMSUtil;
@@ -42,8 +43,8 @@ public class BukkitViaMovementTransmitter extends MovementTransmitterProvider {
     private Object idlePacket2;
     // Use for nms
     private PlayerTicker ticker;
-    // Blueprint MicroServers: idle ticks handed to the loop that owns the player's world; null without them
-    private IdleTickDeferral deferral;
+    // Blueprint MicroServers: idle checks run by the thread that ticks the player's world; null without them
+    private OwnerLoopIdleChecks ownerLoopChecks;
 
     public BukkitViaMovementTransmitter() {
         USE_NMS = Via.getConfig().isNMSPlayerTicking();
@@ -82,10 +83,13 @@ public class BukkitViaMovementTransmitter extends MovementTransmitterProvider {
             }
             ticker = new PlayerTicker(craftPlayer, entityPlayer, playerConnection, idlePacketClass,
                 e -> Via.getPlatform().getLogger().log(Level.WARNING, "Failed to handle idle packet", e));
-            final IdleTickDeferral.Loops loops = MicroServerLoops.detect();
-            if (loops != null) {
-                deferral = new IdleTickDeferral(loops, (player, tracker, packet, advance) -> ticker.tick(player, tracker, packet, advance));
-                Via.getPlatform().getLogger().info("Idle player ticks run on the MicroServer that ticks the player's world");
+            final OwnerLoopIdleChecks.Domains domains = MicroServerLoops.detect();
+            if (domains != null) {
+                ownerLoopChecks = new OwnerLoopIdleChecks(domains, (player, now) -> checkIdle((Player) player, now),
+                    System::currentTimeMillis,
+                    e -> Via.getPlatform().getLogger().log(Level.WARNING, "Idle player checks on MicroServers failed; "
+                        + "the main thread checks every player from now on", e));
+                Via.getPlatform().getLogger().info("Idle player checks run on the MicroServer that ticks the player's world");
             }
         }
     }
@@ -114,12 +118,7 @@ public class BukkitViaMovementTransmitter extends MovementTransmitterProvider {
         if (USE_NMS) {
             Player player = Bukkit.getPlayer(info.getProtocolInfo().getUuid());
             if (player != null) {
-                final Object packet = movementTracker.isGround() ? idlePacket2 : idlePacket;
-                if (deferral != null && Bukkit.isPrimaryThread()) {
-                    deferral.tick(player, movementTracker, packet);
-                } else {
-                    ticker.tick(player, movementTracker, packet, true);
-                }
+                ticker.tick(player, movementTracker, movementTracker.isGround() ? idlePacket2 : idlePacket, true);
             }
         } else {
             ChannelHandlerContext context = PipelineUtil.getContextBefore("decoder", info.getChannel().pipeline());
@@ -144,9 +143,20 @@ public class BukkitViaMovementTransmitter extends MovementTransmitterProvider {
     }
 
     @Override
-    public void afterIdlePass() {
-        if (deferral != null) {
-            deferral.flush();
+    public boolean runIdlePass() {
+        // Off game MicroServers (or once a call into them failed) the idle packet task makes its own pass, as before.
+        return ownerLoopChecks != null && MicroServersSupport.gameLoopsEnabled() && ownerLoopChecks.mainPass();
+    }
+
+    /**
+     * The idle packet task's check for one player, on the thread that ticks them. It starts from the player, so
+     * there is no {@code Bukkit#getPlayer} lookup, only the connection by the same UUID the task's lookup used.
+     */
+    private void checkIdle(final Player player, final long now) {
+        final ConnectionManager connections = Via.getManager().getConnectionManager();
+        final MovementTracker tracker = OwnerLoopIdleChecks.dueTracker(connections.getServerConnection(player.getUniqueId()), now);
+        if (tracker != null) {
+            ticker.tick(player, tracker, tracker.isGround() ? idlePacket2 : idlePacket, true);
         }
     }
 
@@ -208,12 +218,12 @@ public class BukkitViaMovementTransmitter extends MovementTransmitterProvider {
     }
 
     /**
-     * {@link IdleTickDeferral.Loops} over Blueprint's MicroServers ({@link MicroServersSupport}). {@code null} off
-     * Blueprint, or with {@code -Dviaversion.idleTicksOnOwnerLoop=false}.
+     * {@link OwnerLoopIdleChecks.Domains} over Blueprint's MicroServers ({@link MicroServersSupport}). {@code null}
+     * off Blueprint, or with {@code -Dviaversion.idleTicksOnOwnerLoop=false}.
      */
-    static final class MicroServerLoops implements IdleTickDeferral.Loops {
+    static final class MicroServerLoops implements OwnerLoopIdleChecks.Domains {
 
-        static IdleTickDeferral.Loops detect() {
+        static OwnerLoopIdleChecks.Domains detect() {
             if (!Boolean.parseBoolean(System.getProperty("viaversion.idleTicksOnOwnerLoop", "true")) || !MicroServersSupport.isBlueprint()) {
                 return null;
             }
@@ -221,18 +231,33 @@ public class BukkitViaMovementTransmitter extends MovementTransmitterProvider {
         }
 
         @Override
-        public Object ownerOf(final Object player) {
-            return MicroServersSupport.gameLoopOf(((Player) player).getWorld());
+        public Iterable<?> gameLoops() {
+            return MicroServersSupport.gameLoops();
         }
 
         @Override
-        public void execute(final Object loop, final Runnable task) {
-            MicroServersSupport.execute(loop, task);
+        public Iterable<?> mainThreadPlayers() {
+            return MicroServersSupport.mainThreadPlayers();
         }
 
         @Override
-        public boolean isOnline(final Object player) {
-            return ((Player) player).isOnline();
+        public Iterable<?> players(final Object loop) {
+            return MicroServersSupport.playersOf(loop);
+        }
+
+        @Override
+        public boolean isOwnedByCurrentThread(final Object loop) {
+            return MicroServersSupport.isOwnedByCurrentThread(loop);
+        }
+
+        @Override
+        public boolean isRunning(final Object loop) {
+            return MicroServersSupport.isRunning(loop);
+        }
+
+        @Override
+        public void runEveryTick(final Object loop, final Runnable task) {
+            MicroServersSupport.runEveryTick(loop, task);
         }
     }
 }

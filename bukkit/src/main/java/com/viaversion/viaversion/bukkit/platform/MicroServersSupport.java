@@ -18,10 +18,16 @@
 package com.viaversion.viaversion.bukkit.platform;
 
 import com.viaversion.viaversion.api.Via;
+import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.logging.Level;
 import org.bukkit.World;
+import org.bukkit.entity.Player;
 import org.bukkit.plugin.Plugin;
 
 /**
@@ -84,33 +90,88 @@ public final class MicroServersSupport {
     }
 
     /**
-     * The game MicroServer that ticks {@code world}, or {@code null} when the main thread does (or this is not
-     * Blueprint).
+     * True on Blueprint with game MicroServers enabled, when the calls the idle player checks make
+     * ({@link #gameLoops()} and the rest) resolved.
      */
-    public static Object gameLoopOf(final World world) {
-        if (Domains.OF == null) {
-            return null;
+    public static boolean gameLoopsEnabled() {
+        if (Domains.OF == null || Loops.IS_ENABLED == null) {
+            return false;
         }
         try {
-            final Object domain = Domains.OF.invoke(null, world);
-            return domain == null || (Boolean) Domains.IS_GLOBAL.invoke(domain) ? null : domain;
+            return (Boolean) Loops.IS_ENABLED.invoke(null);
         } catch (final ReflectiveOperationException | RuntimeException e) {
-            return null;
+            return false;
         }
     }
 
+    /** Main thread. The game MicroServers now running ({@code MicroServers#games}). */
+    public static Collection<?> gameLoops() {
+        return (Collection<?>) invoke(Loops.GAMES, null);
+    }
+
     /**
-     * Runs {@code task} on {@code gameLoop}'s thread at the start of its next tick ({@code MicroServer#execute}).
-     *
-     * @throws IllegalStateException when the loop has stopped, or the call failed
+     * Main thread. The players in the worlds the main thread ticks: the global domain's worlds' players. Unlike
+     * the global domain's {@code getPlayers}, this does not walk every player on the server.
      */
-    public static void execute(final Object gameLoop, final Runnable task) {
+    public static List<Player> mainThreadPlayers() {
+        final Object global = invoke(Loops.GLOBAL, null);
+        List<Player> players = null;
+        for (final Object world : (Collection<?>) invoke(Loops.GET_WORLDS, global)) {
+            final List<Player> inWorld = ((World) world).getPlayers();
+            if (inWorld.isEmpty()) {
+                continue;
+            }
+            if (players == null) {
+                players = new ArrayList<>(inWorld);
+            } else {
+                players.addAll(inWorld);
+            }
+        }
+        return players == null ? Collections.emptyList() : players;
+    }
+
+    /** On {@code gameLoop}'s thread. The players in its worlds. */
+    @SuppressWarnings("unchecked")
+    public static Collection<Player> playersOf(final Object gameLoop) {
+        return (Collection<Player>) invoke(Loops.GET_PLAYERS, gameLoop);
+    }
+
+    /** True on {@code gameLoop}'s own thread, inside its tick. */
+    public static boolean isOwnedByCurrentThread(final Object gameLoop) {
+        return (Boolean) invoke(Loops.IS_OWNED, gameLoop);
+    }
+
+    /** False once {@code gameLoop} has been shut down. */
+    public static boolean isRunning(final Object gameLoop) {
+        return (Boolean) invoke(Loops.IS_RUNNING, gameLoop);
+    }
+
+    /**
+     * Runs {@code task} on {@code gameLoop}'s thread at the start of each of its ticks, from its next one
+     * ({@code MicroServer#runTaskTimer(task, 1, 1)}).
+     *
+     * @throws IllegalStateException when the loop has stopped
+     */
+    public static void runEveryTick(final Object gameLoop, final Runnable task) {
         try {
-            Domains.EXECUTE.invoke(gameLoop, task);
-        } catch (final java.lang.reflect.InvocationTargetException e) {
-            throw new IllegalStateException("MicroServer#execute failed", e.getCause());
-        } catch (final ReflectiveOperationException | RuntimeException e) {
-            throw new IllegalStateException("MicroServer#execute failed", e);
+            Domains.RUN_TASK_TIMER.invoke(gameLoop, task, 1L, 1L);
+        } catch (final InvocationTargetException e) {
+            if (e.getCause() instanceof IllegalStateException stopped) {
+                throw stopped;
+            }
+            throw new RuntimeException("MicroServer#runTaskTimer failed", e.getCause());
+        } catch (final ReflectiveOperationException e) {
+            throw new RuntimeException("MicroServer#runTaskTimer failed", e);
+        }
+    }
+
+    private static Object invoke(final Method method, final Object target) {
+        try {
+            return method.invoke(target);
+        } catch (final InvocationTargetException e) {
+            throw new RuntimeException(method.getName() + " failed", e.getCause());
+        } catch (final ReflectiveOperationException e) {
+            throw new RuntimeException(method.getName() + " failed", e);
         }
     }
 
@@ -127,7 +188,6 @@ public final class MicroServersSupport {
         static final Method OF;
         static final Method IS_GLOBAL;
         static final Method RUN_TASK_TIMER;
-        static final Method EXECUTE;
         /** Set when Blueprint is present but its API did not resolve; null off Blueprint. */
         static final Throwable FAILURE;
 
@@ -135,7 +195,6 @@ public final class MicroServersSupport {
             Method of = null;
             Method isGlobal = null;
             Method runTaskTimer = null;
-            Method execute = null;
             Throwable failure = null;
             Class<?> microServers = null;
             try {
@@ -148,7 +207,6 @@ public final class MicroServersSupport {
                     final Class<?> microServer = Class.forName("dev.reximian9k.spigot.micro.MicroServer");
                     isGlobal = microServer.getMethod("isGlobal");
                     runTaskTimer = microServer.getMethod("runTaskTimer", Runnable.class, long.class, long.class);
-                    execute = microServer.getMethod("execute", Runnable.class);
                     of = microServers.getMethod("of", World.class);
                 } catch (final ReflectiveOperationException | LinkageError e) {
                     of = null;
@@ -158,8 +216,55 @@ public final class MicroServersSupport {
             OF = of;
             IS_GLOBAL = isGlobal;
             RUN_TASK_TIMER = runTaskTimer;
-            EXECUTE = execute;
             FAILURE = failure;
+        }
+    }
+
+    /**
+     * What the idle player checks call, resolved apart from {@link Domains} so that a Blueprint without them
+     * only loses the checks on game threads. All null when any is missing.
+     */
+    private static final class Loops {
+        static final Method IS_ENABLED;  // MicroServers.isEnabled()
+        static final Method GLOBAL;      // MicroServers.global()
+        static final Method GAMES;       // MicroServers.games()
+        static final Method GET_WORLDS;  // MicroServer#getWorlds()
+        static final Method GET_PLAYERS; // MicroServer#getPlayers()
+        static final Method IS_OWNED;    // MicroServer#isOwnedByCurrentThread()
+        static final Method IS_RUNNING;  // MicroServer#isRunning()
+
+        static {
+            Method isEnabled = null;
+            Method global = null;
+            Method games = null;
+            Method getWorlds = null;
+            Method getPlayers = null;
+            Method isOwned = null;
+            Method isRunning = null;
+            if (Domains.OF != null) {
+                try {
+                    final Class<?> microServers = Class.forName(MICRO_SERVERS);
+                    final Class<?> microServer = Class.forName("dev.reximian9k.spigot.micro.MicroServer");
+                    global = microServers.getMethod("global");
+                    games = microServers.getMethod("games");
+                    getWorlds = microServer.getMethod("getWorlds");
+                    getPlayers = microServer.getMethod("getPlayers");
+                    isOwned = microServer.getMethod("isOwnedByCurrentThread");
+                    isRunning = microServer.getMethod("isRunning");
+                    isEnabled = microServers.getMethod("isEnabled");
+                } catch (final ReflectiveOperationException | LinkageError e) {
+                    isEnabled = null;
+                    Via.getPlatform().getLogger().log(Level.WARNING, "Blueprint's MicroServers API did not match what "
+                        + "ViaVersion expects; idle player checks stay on the main thread", e);
+                }
+            }
+            IS_ENABLED = isEnabled;
+            GLOBAL = global;
+            GAMES = games;
+            GET_WORLDS = getWorlds;
+            GET_PLAYERS = getPlayers;
+            IS_OWNED = isOwned;
+            IS_RUNNING = isRunning;
         }
     }
 
