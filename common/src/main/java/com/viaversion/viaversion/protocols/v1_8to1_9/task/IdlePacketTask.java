@@ -28,6 +28,10 @@ public final class IdlePacketTask implements Runnable {
     public void run() {
         // Once per run rather than per connection: this runs every tick on the main thread, over every connection.
         final MovementTransmitterProvider transmitter = Via.getManager().getProviders().get(MovementTransmitterProvider.class);
+        if (transmitter.runIdlePass()) {
+            return;
+        }
+
         final long now = System.currentTimeMillis();
         for (final UserConnection connection : Via.getManager().getConnectionManager().getConnections()) {
             if (!connection.isActive()) {
@@ -43,6 +47,5 @@ public final class IdlePacketTask implements Runnable {
                 transmitter.sendPlayer(connection, tracker);
             }
         }
-        transmitter.afterIdlePass();
     }
 }
