@@ -56,18 +56,22 @@ public final class HashOps implements Hasher {
     private static final long[] EMPTY_ENTRIES = new long[0];
     private static final int[] EMPTY_LIST_ENTRIES = new int[0];
     private static final int INITIAL_ENTRIES = 8;
+    // Deeper nested hashers are created per element again, so an unusually deep item can't pin a hasher per level
+    private static final int MAX_RETAINED_DEPTH = 16;
     private final ContextHolder contextHolder;
     private final HashBuilder hashBuilder;
+    private final int depth;
     private MapHashBuilder mapBuilder;
     private ListHashBuilder listBuilder;
 
     public HashOps(final CodecContext context, final HashFunction hashFunction) {
-        this(new ContextHolder(context), hashFunction);
+        this(new ContextHolder(context), hashFunction, 0);
     }
 
-    private HashOps(final ContextHolder contextHolder, final HashFunction hashFunction) {
+    private HashOps(final ContextHolder contextHolder, final HashFunction hashFunction, final int depth) {
         this.contextHolder = contextHolder;
         this.hashBuilder = new HashBuilder(hashFunction);
+        this.depth = depth;
     }
 
     @Override
@@ -240,7 +244,10 @@ public final class HashOps implements Hasher {
         private HashOps elementHasher() {
             HashOps hasher = this.elementHasher;
             if (hasher == null) {
-                hasher = this.elementHasher = new HashOps(contextHolder, hashBuilder.function());
+                hasher = new HashOps(contextHolder, hashBuilder.function(), depth + 1);
+                if (depth < MAX_RETAINED_DEPTH) {
+                    this.elementHasher = hasher;
+                }
             }
             hasher.reset();
             return hasher;

@@ -111,6 +111,32 @@ class HashOpsReuseTest extends PlatformTestBase {
     }
 
     @Test
+    void reusedHasherMatchesReferenceForDeepNesting() {
+        final HashOps hasher = new HashOps(context, HashFunction.crc32c());
+        // Past the depth whose hashers are kept, alternating maps and lists
+        for (final int depth : new int[]{15, 16, 17, 40, 3, 100}) {
+            Tag tag = new StringTag("leaf");
+            for (int i = 0; i < depth; i++) {
+                if (i % 2 == 0) {
+                    final CompoundTag compound = new CompoundTag();
+                    compound.put("child", tag);
+                    compound.putInt("depth", i);
+                    tag = compound;
+                } else {
+                    final ListTag<CompoundTag> list = new ListTag<>(CompoundTag.class);
+                    list.add((CompoundTag) tag);
+                    list.add(new CompoundTag());
+                    final CompoundTag holder = new CompoundTag();
+                    holder.put("list", list);
+                    tag = holder;
+                }
+            }
+            assertSameHash(hasher, Types.TAG, tag);
+            assertSameHash(hasher, Types.TEXT_COMPONENT_TAG, tag);
+        }
+    }
+
+    @Test
     void mapEntriesAreOrderedByUnsignedKeyThenValue() {
         // Keys whose hashes straddle the sign bit and equal keys with differing values (only reachable through custom serializers)
         final Type<Integer> type = new HashOnlyType<>() {
