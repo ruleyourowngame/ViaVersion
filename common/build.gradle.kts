@@ -80,6 +80,14 @@ tasks.register<JavaExec>("benchmarkUniformPalette") {
     mainClass.set("com.viaversion.viaversion.api.type.types.chunk.UniformPaletteAllocationBenchmark")
 }
 
+tasks.register<JavaExec>("benchmarkItemHashing") {
+    group = "verification"
+    description = "Measures allocations for item and data component hashing on clientbound inventory paths"
+    dependsOn(tasks.testClasses)
+    classpath = sourceSets.test.get().runtimeClasspath
+    mainClass.set("com.viaversion.viaversion.common.hash.ItemHashAllocationBenchmark")
+}
+
 tasks.named<Jar>("sourcesJar") {
     from(project(":viaversion-api").sourceSets.main.get().allSource)
 }

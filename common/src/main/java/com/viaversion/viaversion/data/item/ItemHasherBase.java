@@ -21,7 +21,6 @@ import com.google.common.cache.CacheBuilder;
 import com.viaversion.nbt.tag.CompoundTag;
 import com.viaversion.viaversion.api.connection.UserConnection;
 import com.viaversion.viaversion.api.data.item.ItemHasher;
-import com.viaversion.viaversion.api.minecraft.codec.CodecContext;
 import com.viaversion.viaversion.api.minecraft.codec.CodecContext.RegistryAccess;
 import com.viaversion.viaversion.api.minecraft.codec.hash.Hasher;
 import com.viaversion.viaversion.api.minecraft.data.StructuredData;
@@ -31,8 +30,8 @@ import com.viaversion.viaversion.api.minecraft.item.Item;
 import com.viaversion.viaversion.api.protocol.Protocol;
 import com.viaversion.viaversion.api.type.Types;
 import com.viaversion.viaversion.codec.CodecRegistryContext;
-import com.viaversion.viaversion.codec.hash.HashFunction;
 import com.viaversion.viaversion.codec.hash.HashOps;
+import com.viaversion.viaversion.codec.hash.ReusableHashOps;
 import it.unimi.dsi.fastutil.ints.Int2IntMap;
 import java.util.Map;
 import org.checkerframework.checker.nullness.qual.Nullable;
@@ -43,13 +42,13 @@ public class ItemHasherBase implements ItemHasher {
     private final Map<Integer, OriginalHashedItem> hashes = CacheBuilder.newBuilder().concurrencyLevel(1).maximumSize(1024).<Integer, OriginalHashedItem>build().asMap();
     protected final UserConnection connection;
     private boolean processingClientboundInventoryPacket;
-    private final CodecContext context;
-    private final CodecContext mappedContext;
+    private final ReusableHashOps hasher;
+    private final ReusableHashOps mappedHasher;
 
     public ItemHasherBase(final Protocol<?, ?, ?, ?> protocol, final UserConnection connection) {
         final RegistryAccess registryAccess = RegistryAccess.of(protocol, connection);
-        this.context = new CodecRegistryContext(protocol, registryAccess, false);
-        this.mappedContext = new CodecRegistryContext(protocol, registryAccess, true);
+        this.hasher = new ReusableHashOps(new CodecRegistryContext(protocol, registryAccess, false));
+        this.mappedHasher = new ReusableHashOps(new CodecRegistryContext(protocol, registryAccess, true));
         this.connection = connection;
     }
 
@@ -61,7 +60,11 @@ public class ItemHasherBase implements ItemHasher {
      * @return the hashed item
      */
     public HashedItem toHashedItem(final Item item, final boolean mapped) {
-        return toHashedItem(new HashOps(mapped ? mappedContext : context, HashFunction.crc32c()), item);
+        final ReusableHashOps reusable = mapped ? this.mappedHasher : this.hasher;
+        final HashOps hasher = reusable.acquire();
+        final HashedItem hashedItem = toHashedItem(hasher, item);
+        reusable.release(hasher);
+        return hashedItem;
     }
 
     public static HashedItem toHashedItem(final Hasher hasher, final Item item) {
@@ -137,8 +140,10 @@ public class ItemHasherBase implements ItemHasher {
     }
 
     private int hashTag(final CompoundTag tag) {
-        final HashOps hasher = new HashOps(context, HashFunction.crc32c());
+        final HashOps hasher = this.hasher.acquire();
         Types.TAG.write(hasher, tag);
-        return hasher.hash();
+        final int hash = hasher.hash();
+        this.hasher.release(hasher);
+        return hash;
     }
 }

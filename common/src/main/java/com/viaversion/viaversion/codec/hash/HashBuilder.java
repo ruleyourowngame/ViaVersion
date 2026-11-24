@@ -22,7 +22,7 @@ import java.util.Arrays;
 public final class HashBuilder {
 
     private static final byte[] EMPTY_BYTES = new byte[0];
-    private static final int MAX_RETAINED_CAPACITY = 4096;
+    static final int MAX_RETAINED_CAPACITY = 4096;
     private final HashFunction hashFunction;
     private byte[] bytes = EMPTY_BYTES;
     private int index;
@@ -159,6 +159,10 @@ public final class HashBuilder {
             this.bytes = EMPTY_BYTES;
             this.direct = false;
         }
+    }
+
+    int capacity() {
+        return this.direct ? 0 : this.bytes.length;
     }
 
     public HashFunction function() {
