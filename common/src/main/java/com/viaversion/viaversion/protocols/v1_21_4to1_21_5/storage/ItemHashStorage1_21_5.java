@@ -21,13 +21,12 @@ import com.google.common.cache.Cache;
 import com.google.common.cache.CacheBuilder;
 import com.viaversion.viaversion.api.connection.UserConnection;
 import com.viaversion.viaversion.api.data.item.ItemHasher;
-import com.viaversion.viaversion.api.minecraft.codec.CodecContext;
 import com.viaversion.viaversion.api.minecraft.codec.CodecContext.RegistryAccess;
 import com.viaversion.viaversion.api.minecraft.codec.hash.Hasher;
 import com.viaversion.viaversion.api.minecraft.data.StructuredData;
 import com.viaversion.viaversion.codec.CodecRegistryContext;
-import com.viaversion.viaversion.codec.hash.HashFunction;
 import com.viaversion.viaversion.codec.hash.HashOps;
+import com.viaversion.viaversion.codec.hash.ReusableHashOps;
 import com.viaversion.viaversion.data.item.ItemHasherBase;
 import com.viaversion.viaversion.protocols.v1_21_4to1_21_5.Protocol1_21_4To1_21_5;
 import java.util.concurrent.ExecutionException;
@@ -38,11 +37,11 @@ public class ItemHashStorage1_21_5 implements ItemHasher {
     private final Cache<Long, StructuredData<?>> hashToStructuredData = CacheBuilder.newBuilder().concurrencyLevel(1).maximumSize(512).build();
     private final long keyMultiplier = ThreadLocalRandom.current().nextLong() | 1; // Odd to keep keys unique, random to not have predictable buckets
     private boolean processingClientboundInventoryPacket;
-    private final CodecContext context;
+    private final ReusableHashOps hasher;
 
     public ItemHashStorage1_21_5(final Protocol1_21_4To1_21_5 protocol, final UserConnection connection) {
         final RegistryAccess registryAccess = RegistryAccess.of(protocol, connection);
-        this.context = new CodecRegistryContext(protocol, registryAccess, true); // always using 1.21.5 items as input
+        this.hasher = new ReusableHashOps(new CodecRegistryContext(protocol, registryAccess, true)); // always using 1.21.5 items as input
     }
 
     public void trackStructuredData(final StructuredData<?> structuredData) {
@@ -50,8 +49,9 @@ public class ItemHashStorage1_21_5 implements ItemHasher {
             return;
         }
 
-        final HashOps hasher = new HashOps(context, HashFunction.crc32c());
+        final HashOps hasher = this.hasher.acquire();
         final int hash = hasher.context().isSupported(structuredData.key()) ? hash(hasher, structuredData) : ItemHasherBase.UNKNOWN_HASH;
+        this.hasher.release(hasher);
         if (hash == ItemHasherBase.UNKNOWN_HASH) {
             return;
         }

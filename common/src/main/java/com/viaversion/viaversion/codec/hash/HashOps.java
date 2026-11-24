@@ -22,18 +22,14 @@ import com.viaversion.viaversion.api.minecraft.codec.ThrowingOps;
 import com.viaversion.viaversion.api.minecraft.codec.hash.Hasher;
 import com.viaversion.viaversion.api.type.Type;
 import com.viaversion.viaversion.api.type.Types;
-import com.viaversion.viaversion.codec.OpsBase;
-import it.unimi.dsi.fastutil.ints.IntArrayList;
-import it.unimi.dsi.fastutil.ints.IntList;
-import java.util.ArrayList;
-import java.util.Comparator;
-import java.util.List;
+import java.util.Arrays;
 import java.util.function.Consumer;
 
 /**
- * Re-usable (but not thread-safe) ops for writing hashes.
+ * Re-usable (but not thread-safe) ops for writing hashes. Reusing one instance also reuses
+ * the buffers of nested maps and lists.
  */
-public final class HashOps extends OpsBase implements Hasher {
+public final class HashOps implements Hasher {
 
     private static final byte TAG_MAP_START = 2;
     private static final byte TAG_MAP_END = 3;
@@ -57,11 +53,33 @@ public final class HashOps extends OpsBase implements Hasher {
     static final byte[] TRUE = {TAG_BOOLEAN, 1};
     static final byte[] EMPTY_LIST = {TAG_LIST_START, TAG_LIST_END};
     static final byte[] EMPTY_MAP = {TAG_MAP_START, TAG_MAP_END};
+    private static final long[] EMPTY_ENTRIES = new long[0];
+    private static final int[] EMPTY_LIST_ENTRIES = new int[0];
+    private static final int INITIAL_ENTRIES = 8;
+    private final ContextHolder contextHolder;
     private final HashBuilder hashBuilder;
+    private MapHashBuilder mapBuilder;
+    private ListHashBuilder listBuilder;
 
     public HashOps(final CodecContext context, final HashFunction hashFunction) {
-        super(context);
+        this(new ContextHolder(context), hashFunction);
+    }
+
+    private HashOps(final ContextHolder contextHolder, final HashFunction hashFunction) {
+        this.contextHolder = contextHolder;
         this.hashBuilder = new HashBuilder(hashFunction);
+    }
+
+    @Override
+    public CodecContext context() {
+        return this.contextHolder.context;
+    }
+
+    /**
+     * Sets the context of these ops and of every nested hasher created for them.
+     */
+    void setContext(final CodecContext context) {
+        this.contextHolder.context = context;
     }
 
     @Override
@@ -149,16 +167,39 @@ public final class HashOps extends OpsBase implements Hasher {
 
     @Override
     public void writeList(final Consumer<ListSerializer> consumer) {
-        final ListHashBuilder listHasher = new ListHashBuilder();
-        consumer.accept(listHasher);
-        listHasher.applyHashToParent();
+        ListHashBuilder builder = this.listBuilder;
+        if (builder == null) {
+            builder = this.listBuilder = new ListHashBuilder();
+        } else if (builder.active) {
+            // Only reachable when a consumer writes to these ops instead of its serializer
+            builder = new ListHashBuilder();
+        }
+
+        builder.begin();
+        try {
+            consumer.accept(builder);
+            builder.applyHashToParent();
+        } finally {
+            builder.end();
+        }
     }
 
     @Override
     public void writeMap(final Consumer<MapSerializer> consumer) {
-        final MapHashBuilder mapHasher = new MapHashBuilder();
-        consumer.accept(mapHasher);
-        mapHasher.applyHashToParent();
+        MapHashBuilder builder = this.mapBuilder;
+        if (builder == null) {
+            builder = this.mapBuilder = new MapHashBuilder();
+        } else if (builder.active) {
+            builder = new MapHashBuilder();
+        }
+
+        builder.begin();
+        try {
+            consumer.accept(builder);
+            builder.applyHashToParent();
+        } finally {
+            builder.end();
+        }
     }
 
     @Override
@@ -171,28 +212,54 @@ public final class HashOps extends OpsBase implements Hasher {
         this.hashBuilder.reset();
     }
 
+    // Shared by a hasher and all of its nested hashers, so a reused tree can switch contexts at once
+    private static final class ContextHolder {
+
+        private CodecContext context;
+
+        private ContextHolder(final CodecContext context) {
+            this.context = context;
+        }
+    }
+
+    // Builders and their element hashers are kept and reused for every collection at the same depth,
+    // so hashing a nested component allocates nothing once each depth has been seen.
     private abstract class CollectionHashBuilder {
 
-        protected final HashOps hasher = new HashOps(context(), hashBuilder.function());
+        private HashOps elementHasher;
+        boolean active;
+
+        void begin() {
+            this.active = true;
+        }
+
+        void end() {
+            this.active = false;
+        }
+
+        private HashOps elementHasher() {
+            HashOps hasher = this.elementHasher;
+            if (hasher == null) {
+                hasher = this.elementHasher = new HashOps(contextHolder, hashBuilder.function());
+            }
+            hasher.reset();
+            return hasher;
+        }
 
         protected int listHash(final Consumer<ListSerializer> consumer) {
-            hasher.reset();
-            final ListHashBuilder listHasher = hasher.new ListHashBuilder();
-            consumer.accept(listHasher);
-            listHasher.applyHashToParent();
+            final HashOps hasher = elementHasher();
+            hasher.writeList(consumer);
             return hasher.hash();
         }
 
         protected int mapHash(final Consumer<MapSerializer> consumer) {
-            hasher.reset();
-            final MapHashBuilder mapHasher = hasher.new MapHashBuilder();
-            consumer.accept(mapHasher);
-            mapHasher.applyHashToParent();
+            final HashOps hasher = elementHasher();
+            hasher.writeMap(consumer);
             return hasher.hash();
         }
 
         protected <V> int hash(final Type<V> type, final V value) {
-            hasher.reset();
+            final HashOps hasher = elementHasher();
             type.write(hasher, value);
             return hasher.hash();
         }
@@ -200,23 +267,45 @@ public final class HashOps extends OpsBase implements Hasher {
 
     private final class MapHashBuilder extends CollectionHashBuilder implements MapSerializer {
 
-        private final List<Entry> entries = new ArrayList<>();
+        // Each entry is (key << 32 | value) with the sign bit flipped, so a signed sort orders entries
+        // by unsigned key, then unsigned value, as vanilla does
+        private long[] entries = EMPTY_ENTRIES;
+        private int size;
+
+        @Override
+        void end() {
+            super.end();
+            this.size = 0;
+            if (this.entries.length * Long.BYTES > HashBuilder.MAX_RETAINED_CAPACITY) {
+                this.entries = EMPTY_ENTRIES;
+            }
+        }
+
+        private void add(final int key, final int value) {
+            if (this.size == this.entries.length) {
+                this.entries = Arrays.copyOf(this.entries, Math.max(INITIAL_ENTRIES, this.size * 2));
+            }
+            this.entries[this.size++] = (((long) key << 32) | (value & 0xFFFFFFFFL)) ^ Long.MIN_VALUE;
+        }
 
         @Override
         public <K, T> MapSerializer write(final Type<K> keyType, final K key, final Type<T> valueType, final T value) {
-            entries.add(new Entry(hash(keyType, key), hash(valueType, value)));
+            final int keyHash = hash(keyType, key);
+            add(keyHash, hash(valueType, value));
             return this;
         }
 
         @Override
         public MapSerializer writeList(final String key, final Consumer<ListSerializer> consumer) {
-            entries.add(new Entry(hash(Types.STRING, key), listHash(consumer)));
+            final int keyHash = hash(Types.STRING, key);
+            add(keyHash, listHash(consumer));
             return this;
         }
 
         @Override
         public MapSerializer writeMap(final String key, final Consumer<MapSerializer> consumer) {
-            entries.add(new Entry(hash(Types.STRING, key), mapHash(consumer)));
+            final int keyHash = hash(Types.STRING, key);
+            add(keyHash, mapHash(consumer));
             return this;
         }
 
@@ -233,74 +322,74 @@ public final class HashOps extends OpsBase implements Hasher {
         }
 
         public void applyHashToParent() {
-            if (entries.isEmpty()) {
+            final int size = this.size;
+            if (size == 0) {
                 hashBuilder.writeBytesDirect(EMPTY_MAP);
                 return;
             }
 
-            final int size = entries.size();
             hashBuilder.preSize((size * Integer.BYTES * 2) + (2 * Byte.BYTES));
             hashBuilder.writeByte(TAG_MAP_START);
-            entries.sort(Comparator.naturalOrder());
+            Arrays.sort(this.entries, 0, size);
             for (int i = 0; i < size; i++) {
-                final Entry entry = entries.get(i);
-                hashBuilder.writeInt(entry.key);
-                hashBuilder.writeInt(entry.value);
+                final long entry = this.entries[i] ^ Long.MIN_VALUE;
+                hashBuilder.writeInt((int) (entry >>> 32));
+                hashBuilder.writeInt((int) entry);
             }
             hashBuilder.writeByte(TAG_MAP_END);
-        }
-
-        private record Entry(int key, int value) implements Comparable<Entry> {
-
-            @Override
-            public int compareTo(final Entry o) {
-                // For some reason ordered via unsigned values
-                if (this.key != o.key) {
-                    return Long.compare(padToLong(this.key), padToLong(o.key));
-                } else {
-                    return Long.compare(padToLong(this.value), padToLong(o.value));
-                }
-            }
-
-            private static long padToLong(final int value) {
-                return value & 0xFFFFFFFFL;
-            }
         }
     }
 
     private final class ListHashBuilder extends CollectionHashBuilder implements ListSerializer {
 
-        private final IntList entries = new IntArrayList();
+        private int[] entries = EMPTY_LIST_ENTRIES;
+        private int size;
+
+        @Override
+        void end() {
+            super.end();
+            this.size = 0;
+            if (this.entries.length * Integer.BYTES > HashBuilder.MAX_RETAINED_CAPACITY) {
+                this.entries = EMPTY_LIST_ENTRIES;
+            }
+        }
+
+        private void add(final int hash) {
+            if (this.size == this.entries.length) {
+                this.entries = Arrays.copyOf(this.entries, Math.max(INITIAL_ENTRIES, this.size * 2));
+            }
+            this.entries[this.size++] = hash;
+        }
 
         @Override
         public <T> ListSerializer write(final Type<T> valueType, final T value) {
-            entries.add(hash(valueType, value));
+            add(hash(valueType, value));
             return this;
         }
 
         @Override
         public ListSerializer writeList(final Consumer<ListSerializer> consumer) {
-            entries.add(listHash(consumer));
+            add(listHash(consumer));
             return this;
         }
 
         @Override
         public ListSerializer writeMap(final Consumer<MapSerializer> consumer) {
-            entries.add(mapHash(consumer));
+            add(mapHash(consumer));
             return this;
         }
 
         public void applyHashToParent() {
-            if (entries.isEmpty()) {
+            final int size = this.size;
+            if (size == 0) {
                 hashBuilder.writeBytesDirect(EMPTY_LIST);
                 return;
             }
 
-            final int size = entries.size();
             hashBuilder.preSize(size * Integer.BYTES + 2 * Byte.BYTES);
             hashBuilder.writeByte(TAG_LIST_START);
             for (int i = 0; i < size; i++) {
-                hashBuilder.writeInt(entries.getInt(i));
+                hashBuilder.writeInt(this.entries[i]);
             }
             hashBuilder.writeByte(TAG_LIST_END);
         }
