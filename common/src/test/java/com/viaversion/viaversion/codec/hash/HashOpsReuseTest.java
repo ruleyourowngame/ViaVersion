@@ -259,6 +259,33 @@ class HashOpsReuseTest extends PlatformTestBase {
     }
 
     @Test
+    void releasedHasherDropsOversizedNestedBuffers() {
+        final ReusableHashOps reusable = new ReusableHashOps(context);
+        final CompoundTag inner = new CompoundTag();
+        final ListTag<IntTag> longList = new ListTag<>(IntTag.class);
+        final CompoundTag wide = new CompoundTag();
+        for (int i = 0; i < 5000; i++) {
+            longList.add(new IntTag(i));
+            wide.putInt("k" + i, i);
+        }
+        inner.put("long_list", longList);
+        inner.put("wide", wide);
+        // Last, so nothing hashed after it in the same map resets the buffer it grew
+        inner.putString("huge", "x".repeat(100_000));
+        final CompoundTag outer = new CompoundTag();
+        outer.put("inner", inner);
+
+        final HashOps hasher = reusable.acquire();
+        Types.TAG.write(hasher, outer);
+        Assertions.assertEquals(referenceHash(Types.TAG, outer), hasher.hash());
+        reusable.release(hasher);
+
+        // Every level may keep at most a capped byte buffer and capped entry arrays
+        Assertions.assertTrue(hasher.retainedBytes() <= 4 * 3 * HashBuilder.MAX_RETAINED_CAPACITY,
+            () -> "retained " + hasher.retainedBytes() + " bytes after hashing a large value");
+    }
+
+    @Test
     void reusableHashOpsIsSafeAcrossThreads() throws Exception {
         final ReusableHashOps reusable = new ReusableHashOps(context);
         final List<CompoundTag> tags = new ArrayList<>();

@@ -216,6 +216,20 @@ public final class HashOps implements Hasher {
         this.hashBuilder.reset();
     }
 
+    /**
+     * Returns the bytes of buffers and entry arrays this hasher and its nested hashers keep for reuse.
+     */
+    int retainedBytes() {
+        int bytes = this.hashBuilder.capacity();
+        if (this.mapBuilder != null) {
+            bytes += this.mapBuilder.retainedBytes();
+        }
+        if (this.listBuilder != null) {
+            bytes += this.listBuilder.retainedBytes();
+        }
+        return bytes;
+    }
+
     // Shared by a hasher and all of its nested hashers, so a reused tree can switch contexts at once
     private static final class ContextHolder {
 
@@ -239,6 +253,14 @@ public final class HashOps implements Hasher {
 
         void end() {
             this.active = false;
+            if (this.elementHasher != null) {
+                // Drops an oversized buffer now rather than on the element hasher's next use, which may never come
+                this.elementHasher.reset();
+            }
+        }
+
+        int retainedBytes() {
+            return this.elementHasher != null ? this.elementHasher.retainedBytes() : 0;
         }
 
         private HashOps elementHasher() {
@@ -278,6 +300,11 @@ public final class HashOps implements Hasher {
         // by unsigned key, then unsigned value, as vanilla does
         private long[] entries = EMPTY_ENTRIES;
         private int size;
+
+        @Override
+        int retainedBytes() {
+            return super.retainedBytes() + this.entries.length * Long.BYTES;
+        }
 
         @Override
         void end() {
@@ -351,6 +378,11 @@ public final class HashOps implements Hasher {
 
         private int[] entries = EMPTY_LIST_ENTRIES;
         private int size;
+
+        @Override
+        int retainedBytes() {
+            return super.retainedBytes() + this.entries.length * Integer.BYTES;
+        }
 
         @Override
         void end() {

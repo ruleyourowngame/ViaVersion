@@ -161,6 +161,10 @@ public final class HashBuilder {
         }
     }
 
+    int capacity() {
+        return this.direct ? 0 : this.bytes.length;
+    }
+
     public HashFunction function() {
         return hashFunction;
     }
