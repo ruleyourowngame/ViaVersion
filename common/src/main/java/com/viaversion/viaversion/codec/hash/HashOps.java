@@ -86,6 +86,13 @@ public final class HashOps implements Hasher {
         this.contextHolder.context = context;
     }
 
+    /**
+     * Returns the hash function shared by these ops and every nested hasher created for them.
+     */
+    HashFunction hashFunction() {
+        return this.hashBuilder.function();
+    }
+
     @Override
     public void writeByte(final byte b) {
         hashBuilder.preSize(Byte.BYTES + Byte.BYTES)
