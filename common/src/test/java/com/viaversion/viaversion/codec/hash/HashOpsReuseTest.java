@@ -259,6 +259,32 @@ class HashOpsReuseTest extends PlatformTestBase {
     }
 
     @Test
+    void reusableHasherMeasuresHashedSizeLikeAFreshHasher() {
+        // ItemHashStorage1_21_5 bounds cached data by this estimate, which upstream takes from a
+        // size-tracking hash function around a fresh hasher per value
+        final ReusableHashOps reusable = new ReusableHashOps(context);
+        final Random random = new Random(0x51ce);
+        for (int i = 0; i < 500; i++) {
+            final CompoundTag tag = randomCompound(random, 0);
+            final SizeTrackingFunction tracking = new SizeTrackingFunction();
+            final ReferenceHashOps reference = new ReferenceHashOps(context, tracking);
+            reference.write(Types.TAG, tag);
+            final int expectedHash = reference.hash();
+
+            final HashOps hasher = reusable.acquire();
+            hasher.write(Types.TAG, tag);
+            Assertions.assertEquals(expectedHash, hasher.hash());
+            final long size = ReusableHashOps.hashedSize(hasher, SizeTrackingFunction.CALL_SIZE);
+            reusable.release(hasher);
+            Assertions.assertEquals(tracking.size, size, () -> "hashed size mismatch for " + tag);
+        }
+
+        final HashOps hasher = reusable.acquire();
+        Assertions.assertEquals(0, ReusableHashOps.hashedSize(hasher, SizeTrackingFunction.CALL_SIZE), "acquire must reset the size");
+        reusable.release(hasher);
+    }
+
+    @Test
     void releasedHasherDropsOversizedNestedBuffers() {
         final ReusableHashOps reusable = new ReusableHashOps(context);
         final CompoundTag inner = new CompoundTag();
@@ -443,6 +469,19 @@ class HashOpsReuseTest extends PlatformTestBase {
         final byte[] bytes = new byte[random.nextInt(8)];
         random.nextBytes(bytes);
         return bytes;
+    }
+
+    // Mirrors upstream's SizeTrackingHashFunction in ItemHashStorage1_21_5
+    private static final class SizeTrackingFunction implements HashFunction {
+        private static final int CALL_SIZE = 32;
+        private final HashFunction function = HashFunction.crc32c();
+        private long size;
+
+        @Override
+        public int hashBytes(final byte[] data, final int length) {
+            this.size += length + CALL_SIZE;
+            return this.function.hashBytes(data, length);
+        }
     }
 
     private abstract static class HashOnlyType<T> extends Type<T> {
