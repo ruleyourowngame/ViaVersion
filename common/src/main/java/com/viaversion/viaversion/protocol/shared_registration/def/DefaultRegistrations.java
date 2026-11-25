@@ -27,8 +27,8 @@ public final class DefaultRegistrations {
         SharedRegistrations.defaultRegistrations().registrations()
             .ranges(EntityRegistrations::entity, ProtocolVersion.v1_13, b -> b
                 .to(ProtocolVersion.v1_14_4, EntityRegistrations::registerEntityPackets1_13)
-                .to(ProtocolVersion.v1_16_2, EntityRegistrations::registerEntityPackets1_14_4)
-                .to(ProtocolVersion.v1_17_1, EntityRegistrations::registerEntityPackets1_16_2)
+                .to(ProtocolVersion.v1_17, EntityRegistrations::registerEntityPackets1_14_4)
+                .to(ProtocolVersion.v1_17_1, EntityRegistrations::registerEntityPackets1_17)
                 .to(ProtocolVersion.v1_19, EntityRegistrations::registerEntityPackets1_17_1)
                 .to(ProtocolVersion.v1_20_5, EntityRegistrations::registerEntityPackets1_19)
                 .to(ProtocolVersion.v1_21_4, EntityRegistrations::registerEntityPackets1_20_5)
@@ -104,6 +104,8 @@ public final class DefaultRegistrations {
                 .to(ProtocolVersion.v1_19_3, RegistryRegistrations::registerSounds1_14)
                 .since(RegistryRegistrations::registerSounds1_19_3)
             )
+            .range(ProtocolVersion.v1_10, ProtocolVersion.v1_19_3, RegistryRegistrations::registerNamedSound1_10)
+            .since(ProtocolVersion.v1_14, RegistryRegistrations::registerStopSound1_14)
 
             .since(ProtocolVersion.v1_13, RegistryRegistrations::registerStatistics1_13)
             .since(ProtocolVersion.v1_19, RegistryRegistrations::registerCommands1_19)

@@ -45,10 +45,24 @@ public final class ReusableHashOps {
         if (hasher != null) {
             IDLE.set(null);
         } else {
-            hasher = new HashOps(this.context, HashFunction.crc32c());
+            hasher = new HashOps(this.context, new CountingHashFunction(HashFunction.crc32c()));
         }
         hasher.setContext(this.context);
+        ((CountingHashFunction) hasher.hashFunction()).reset();
         return hasher;
+    }
+
+    /**
+     * Returns an estimate of how much data a hasher from {@link #acquire()} has hashed since it was acquired,
+     * counting its nested hashers: the hashed bytes plus {@code overheadPerCall} for every hash computed.
+     *
+     * @param hasher          a hasher from {@link #acquire()} that has not been released yet
+     * @param overheadPerCall estimated size added for each hash computed
+     * @return the estimated size of the hashed data
+     */
+    public static long hashedSize(final HashOps hasher, final int overheadPerCall) {
+        final CountingHashFunction function = (CountingHashFunction) hasher.hashFunction();
+        return function.bytes + function.calls * overheadPerCall;
     }
 
     /**
@@ -61,5 +75,28 @@ public final class ReusableHashOps {
         // Don't keep the connection reachable from an idle hasher
         hasher.setContext(null);
         IDLE.set(hasher);
+    }
+
+    // Shared by a reusable hasher and its nested hashers, so it sees every hash computed for one value
+    private static final class CountingHashFunction implements HashFunction {
+        private final HashFunction function;
+        private long bytes;
+        private long calls;
+
+        private CountingHashFunction(final HashFunction function) {
+            this.function = function;
+        }
+
+        @Override
+        public int hashBytes(final byte[] data, final int length) {
+            this.bytes += length;
+            this.calls++;
+            return this.function.hashBytes(data, length);
+        }
+
+        private void reset() {
+            this.bytes = 0;
+            this.calls = 0;
+        }
     }
 }

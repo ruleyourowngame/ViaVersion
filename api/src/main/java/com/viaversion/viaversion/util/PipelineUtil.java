@@ -164,6 +164,7 @@ public final class PipelineUtil {
         return null;
     }
 
+    @Deprecated(forRemoval = true)
     public static @Nullable ChannelHandlerContext getPreviousContext(String name, ChannelPipeline pipeline) {
         return getPreviousContext(name, pipeline, PREVIOUS_CONTEXT);
     }

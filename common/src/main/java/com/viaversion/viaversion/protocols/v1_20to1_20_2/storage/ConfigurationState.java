@@ -58,6 +58,8 @@ public class ConfigurationState implements StorableObject {
     private boolean queuedJoinGame;
     private CompoundTag lastDimensionRegistry;
     private ClientInformation clientInformation;
+    private String brand;
+    private boolean brandQueued;
     private int queuedServerboundBytes;
     private int queuedServerboundPackets;
     private long queuedClientboundBytes;
@@ -157,6 +159,16 @@ public class ConfigurationState implements StorableObject {
         this.clientInformation = clientInformation;
     }
 
+    /**
+     * Stores the brand the client sent during the current configuration phase, which is queued separately.
+     *
+     * @param brand client brand
+     */
+    public void setQueuedBrand(final String brand) {
+        this.brand = brand;
+        this.brandQueued = true;
+    }
+
     public void addClientboundPacketToQueue(final PacketWrapper wrapper) {
         final UserConnection user = wrapper.user();
         if (user.isPendingDisconnect()) {
@@ -230,9 +242,18 @@ public class ConfigurationState implements StorableObject {
             joinGamePacket = null;
         }
 
+        int insertIndex = hasJoinGamePacket ? 1 : 0;
+        if (!brandQueued) {
+            // The client only sends its brand in the first configuration phase, older clients sent it after every join game
+            final PacketWrapper brandPacket = brandPacket(connection);
+            if (brandPacket != null) {
+                packetQueue.add(insertIndex++, toQueuedPacket(brandPacket, false, true));
+            }
+        }
+
         final PacketWrapper clientInformationPacket = clientInformationPacket(connection);
         if (clientInformationPacket != null) {
-            packetQueue.add(hasJoinGamePacket ? 1 : 0, toQueuedPacket(clientInformationPacket, false, true));
+            packetQueue.add(insertIndex, toQueuedPacket(clientInformationPacket, false, true));
         }
 
         final QueuedPacket[] queuedPackets = drainQueue();
@@ -291,6 +312,7 @@ public class ConfigurationState implements StorableObject {
         }
         bridgePhase = BridgePhase.NONE;
         queuedJoinGame = false;
+        brandQueued = false;
         resetQueueCounters();
     }
 
@@ -334,6 +356,17 @@ public class ConfigurationState implements StorableObject {
         settingsPacket.write(Types.BOOLEAN, clientInformation.textFiltering);
         settingsPacket.write(Types.BOOLEAN, clientInformation.allowListing);
         return settingsPacket;
+    }
+
+    public @Nullable PacketWrapper brandPacket(final UserConnection connection) {
+        if (brand == null) {
+            return null;
+        }
+
+        final PacketWrapper brandPacket = PacketWrapper.create(ServerboundPackets1_19_4.CUSTOM_PAYLOAD, connection);
+        brandPacket.write(Types.STRING, "minecraft:brand");
+        brandPacket.write(Types.STRING, brand);
+        return brandPacket;
     }
 
     public static final class QueuedPacket {

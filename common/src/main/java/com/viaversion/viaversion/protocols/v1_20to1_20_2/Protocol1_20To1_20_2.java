@@ -34,6 +34,7 @@ import com.viaversion.viaversion.api.protocol.remapper.PacketHandler;
 import com.viaversion.viaversion.api.protocol.remapper.PacketHandlers;
 import com.viaversion.viaversion.api.protocol.version.ProtocolVersion;
 import com.viaversion.viaversion.api.type.Types;
+import com.viaversion.viaversion.connection.ProtocolStorablesBase;
 import com.viaversion.viaversion.data.entity.EntityTrackerBase;
 import com.viaversion.viaversion.exception.CancelException;
 import com.viaversion.viaversion.exception.InformativeException;
@@ -48,7 +49,6 @@ import com.viaversion.viaversion.protocols.v1_20to1_20_2.packet.ServerboundPacke
 import com.viaversion.viaversion.protocols.v1_20to1_20_2.rewriter.BlockItemPacketRewriter1_20_2;
 import com.viaversion.viaversion.protocols.v1_20to1_20_2.rewriter.BlockRewriter1_20_2;
 import com.viaversion.viaversion.protocols.v1_20to1_20_2.rewriter.EntityPacketRewriter1_20_2;
-import com.viaversion.viaversion.connection.ProtocolStorablesBase;
 import com.viaversion.viaversion.protocols.v1_20to1_20_2.storage.ConfigurationState;
 import com.viaversion.viaversion.protocols.v1_20to1_20_2.storage.ConfigurationState.BridgePhase;
 import com.viaversion.viaversion.protocols.v1_20to1_20_2.storage.LastResourcePack;
@@ -195,7 +195,16 @@ public final class Protocol1_20To1_20_2 extends AbstractProtocol<ClientboundPack
         });
 
         // If these are not queued, they may be received before the server switched its listener state to play
-        registerServerbound(State.CONFIGURATION, ServerboundConfigurationPackets1_20_2.CUSTOM_PAYLOAD.getId(), -1, queueServerboundPacket(ServerboundPackets1_20_2.CUSTOM_PAYLOAD));
+        final PacketHandler queueCustomPayload = queueServerboundPacket(ServerboundPackets1_20_2.CUSTOM_PAYLOAD);
+        registerServerbound(State.CONFIGURATION, ServerboundConfigurationPackets1_20_2.CUSTOM_PAYLOAD.getId(), -1, wrapper -> {
+            final String channel = Key.namespaced(wrapper.passthrough(Types.STRING));
+            if (channel.equals("minecraft:brand")) {
+                // Store it to re-send it when another ClientboundLoginPacket is sent, older clients sent it after every one
+                final ProtocolStorables1_20_2 storables = wrapper.user().storables(this);
+                storables.configurationState().setQueuedBrand(wrapper.passthrough(Types.STRING));
+            }
+            queueCustomPayload.handle(wrapper);
+        });
         registerServerbound(State.CONFIGURATION, ServerboundConfigurationPackets1_20_2.KEEP_ALIVE.getId(), -1, queueServerboundPacket(ServerboundPackets1_20_2.KEEP_ALIVE));
         registerServerbound(State.CONFIGURATION, ServerboundConfigurationPackets1_20_2.PONG.getId(), -1, queueServerboundPacket(ServerboundPackets1_20_2.PONG));
 
@@ -344,7 +353,7 @@ public final class Protocol1_20To1_20_2 extends AbstractProtocol<ClientboundPack
         protocolInfo.setServerState(State.CONFIGURATION);
 
         final PacketWrapper registryDataPacket = PacketWrapper.create(ClientboundConfigurationPackets1_20_2.REGISTRY_DATA, connection);
-        registryDataPacket.write(Types.COMPOUND_TAG, dimensionRegistry);
+        registryDataPacket.write(Types.COMPOUND_TAG, dimensionRegistry.copy());
         registryDataPacket.send(Protocol1_20To1_20_2.class);
 
         // If we tracked enables features, they'd be sent here
