@@ -282,6 +282,15 @@ class HashOpsReuseTest extends PlatformTestBase {
         final HashOps hasher = reusable.acquire();
         Assertions.assertEquals(0, ReusableHashOps.hashedSize(hasher, SizeTrackingFunction.CALL_SIZE), "acquire must reset the size");
         reusable.release(hasher);
+
+        // A hasher made elsewhere has no size to report and must not become the thread's reusable one
+        final HashOps foreign = new HashOps(context, HashFunction.crc32c());
+        Assertions.assertThrows(IllegalArgumentException.class, () -> ReusableHashOps.hashedSize(foreign, SizeTrackingFunction.CALL_SIZE));
+        reusable.release(foreign);
+        final HashOps next = reusable.acquire();
+        Assertions.assertNotSame(foreign, next);
+        Assertions.assertEquals(0, ReusableHashOps.hashedSize(next, SizeTrackingFunction.CALL_SIZE));
+        reusable.release(next);
     }
 
     @Test

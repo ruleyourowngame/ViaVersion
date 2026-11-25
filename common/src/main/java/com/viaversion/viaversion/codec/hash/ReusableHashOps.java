@@ -61,7 +61,9 @@ public final class ReusableHashOps {
      * @return the estimated size of the hashed data
      */
     public static long hashedSize(final HashOps hasher, final int overheadPerCall) {
-        final CountingHashFunction function = (CountingHashFunction) hasher.hashFunction();
+        if (!(hasher.hashFunction() instanceof final CountingHashFunction function)) {
+            throw new IllegalArgumentException("Hasher was not acquired from ReusableHashOps");
+        }
         return function.bytes + function.calls * overheadPerCall;
     }
 
@@ -71,6 +73,10 @@ public final class ReusableHashOps {
      * @param hasher the hasher, which must not be used afterwards
      */
     public void release(final HashOps hasher) {
+        if (!(hasher.hashFunction() instanceof CountingHashFunction)) {
+            // Not from acquire(), so it can't report its hashed size; leave it to the caller
+            return;
+        }
         hasher.reset();
         // Don't keep the connection reachable from an idle hasher
         hasher.setContext(null);
